@@ -306,8 +306,17 @@ func TestScan_AllRepos(t *testing.T) {
 		paths = append(paths, result.Record.Pathname)
 	}
 
-	if len(paths) == 0 {
-		t.Error("expected at least one path from Scan")
+	want := map[string]bool{
+		"repo-a/manifest.json": false,
+		"repo-a/git.tar.gz":    false,
+	}
+	for _, p := range paths {
+		want[p] = true
+	}
+	for path, found := range want {
+		if !found {
+			t.Errorf("missing path in scan results: %s", path)
+		}
 	}
 }
 

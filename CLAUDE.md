@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```sh
-make build          # build the plakar-github-importer binary
+make build          # build the integration-github-importer binary
 go test -race ./... # run all tests
 go mod tidy         # sync dependencies
 
@@ -14,9 +14,9 @@ go test -run TestListRepos_User ./...
 
 # rebuild, repackage, and reinstall the plugin locally
 make build
-plakar pkg rm plakar-github
+plakar pkg rm integration-github
 plakar pkg create manifest.yaml
-plakar pkg add ./plakar-github_v0.0.1_darwin_arm64.ptar
+plakar pkg add ./integration-github_v0.0.1_darwin_arm64.ptar
 
 # add a source and run a backup
 plakar source add mygithub "github://owner[/repo]" token=<PAT>
@@ -27,7 +27,7 @@ plakar at /path/to/repo backup @mygithub
 
 This is a **plakar importer plugin** for GitHub. Plakar v1.0.6 loads plugins as gRPC subprocess binaries. The plugin lifecycle is:
 
-1. `plakar` reads `manifest.yaml` to discover which protocol (`github://`) maps to which binary (`plakar-github-importer`)
+1. `plakar` reads `manifest.yaml` to discover which protocol (`github://`) maps to which binary (`integration-github-importer`)
 2. plakar spawns the binary; the binary starts a gRPC server via `sdk.EntrypointImporter`
 3. plakar calls `Init` → `Scan` → reads records from the channel → stores them
 

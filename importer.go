@@ -67,9 +67,11 @@ func (g *GitHubImporter) Scan(ctx context.Context) (<-chan *importer.ScanResult,
 	go func() {
 		defer close(ch)
 		for _, repo := range repos {
+			if ctx.Err() != nil {
+				return
+			}
 			if err := g.scanRepo(ctx, repo, ch); err != nil {
 				ch <- importer.NewScanError(repo.GetName(), err)
-				return
 			}
 		}
 	}()
@@ -143,6 +145,10 @@ func (g *GitHubImporter) emitGitArchive(ctx context.Context, repoName string, ch
 		rc, err := client.Client().Get(urlStr)
 		if err != nil {
 			return nil, err
+		}
+		if rc.StatusCode < 200 || rc.StatusCode >= 300 {
+			rc.Body.Close()
+			return nil, fmt.Errorf("github: archive download returned HTTP %d", rc.StatusCode)
 		}
 		return rc.Body, nil
 	})
