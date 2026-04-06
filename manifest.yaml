@@ -1,15 +1,13 @@
 name: plakar-github
 display_name: GitHub
 description: "Backup GitHub repositories, issues, and file history"
-api_version: v1.1.0
+version: v0.0.1
+api_version: 1.0.0
 homepage: https://github.com/damoun/plakar-github
 license: ISC
-tier: community
 
 connectors:
   - type: importer
+    protocols:
+      - github
     executable: plakar-github-importer
-    protocol: github
-    class: vcs
-    subclass: github
-    schema_validator: ./importer/schema.json
