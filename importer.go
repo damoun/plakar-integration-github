@@ -9,10 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/PlakarKorp/kloset/connectors"
-	"github.com/PlakarKorp/kloset/connectors/importer"
 	"github.com/PlakarKorp/kloset/location"
 	"github.com/PlakarKorp/kloset/objects"
+	"github.com/PlakarKorp/kloset/snapshot/importer"
 	"github.com/google/go-github/v71/github"
 )
 
@@ -24,7 +23,7 @@ type GitHubImporter struct {
 }
 
 // NewImporter is the constructor called by the plakar SDK.
-func NewImporter(ctx context.Context, _ *connectors.Options, _ string, config map[string]string) (importer.Importer, error) {
+func NewImporter(ctx context.Context, _ *importer.Options, _ string, config map[string]string) (importer.Importer, error) {
 	token := config["token"]
 	if token == "" {
 		return nil, fmt.Errorf("github: missing required config key: token")
@@ -48,32 +47,29 @@ func NewImporter(ctx context.Context, _ *connectors.Options, _ string, config ma
 	}, nil
 }
 
-func (g *GitHubImporter) Origin() string                { return "github.com" }
-func (g *GitHubImporter) Type() string                  { return "github" }
-func (g *GitHubImporter) Root() string                  { return g.owner }
-func (g *GitHubImporter) Flags() location.Flags         { return 0 }
-func (g *GitHubImporter) Close(_ context.Context) error { return nil }
+func (g *GitHubImporter) Origin(_ context.Context) (string, error) { return "github.com", nil }
+func (g *GitHubImporter) Type(_ context.Context) (string, error)   { return "github", nil }
+func (g *GitHubImporter) Root(_ context.Context) (string, error)   { return g.owner, nil }
+func (g *GitHubImporter) Close(_ context.Context) error            { return nil }
 
-func (g *GitHubImporter) Ping(ctx context.Context) error {
-	_, _, err := g.client.Users.Get(ctx, g.owner)
-	return err
-}
-
-// Import sends records for each repository: manifest, git archive, and issues.
-func (g *GitHubImporter) Import(ctx context.Context, records chan<- *connectors.Record, _ <-chan *connectors.Result) error {
-	defer close(records)
-
+// Scan returns a channel of ScanResults covering all repos, their manifests, git archives, and issues.
+func (g *GitHubImporter) Scan(ctx context.Context) (<-chan *importer.ScanResult, error) {
 	repos, err := g.resolveRepos(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	for _, repo := range repos {
-		if err := g.importRepo(ctx, repo, records); err != nil {
-			return err
+	ch := make(chan *importer.ScanResult)
+	go func() {
+		defer close(ch)
+		for _, repo := range repos {
+			if err := g.scanRepo(ctx, repo, ch); err != nil {
+				ch <- importer.NewScanError(repo.GetName(), err)
+				return
+			}
 		}
-	}
-	return nil
+	}()
+	return ch, nil
 }
 
 func (g *GitHubImporter) resolveRepos(ctx context.Context) ([]*github.Repository, error) {
@@ -97,20 +93,19 @@ func (g *GitHubImporter) resolveRepos(ctx context.Context) ([]*github.Repository
 	return repos, nil
 }
 
-func (g *GitHubImporter) importRepo(ctx context.Context, repo *github.Repository, records chan<- *connectors.Record) error {
+func (g *GitHubImporter) scanRepo(ctx context.Context, repo *github.Repository, ch chan<- *importer.ScanResult) error {
 	repoName := repo.GetName()
 
-	if err := g.emitJSON(repoName+"/manifest.json", "manifest.json", repo, time.Now(), records); err != nil {
+	if err := g.emitJSON(repoName+"/manifest.json", "manifest.json", repo, time.Now(), ch); err != nil {
 		return err
 	}
-	if err := g.emitGitArchive(ctx, repoName, records); err != nil {
+	if err := g.emitGitArchive(ctx, repoName, ch); err != nil {
 		return err
 	}
-	return g.emitIssues(ctx, repoName, records)
+	return g.emitIssues(ctx, repoName, ch)
 }
 
-// emitJSON marshals obj and emits a record at pathname.
-func (g *GitHubImporter) emitJSON(pathname, name string, obj any, modTime time.Time, records chan<- *connectors.Record) error {
+func (g *GitHubImporter) emitJSON(pathname, name string, obj any, modTime time.Time, ch chan<- *importer.ScanResult) error {
 	data, err := json.Marshal(obj)
 	if err != nil {
 		return fmt.Errorf("github: marshaling %s: %w", pathname, err)
@@ -121,13 +116,13 @@ func (g *GitHubImporter) emitJSON(pathname, name string, obj any, modTime time.T
 		Lmode:    0o444,
 		LmodTime: modTime,
 	}
-	records <- connectors.NewRecord(pathname, "", fi, nil, func() (io.ReadCloser, error) {
+	ch <- importer.NewScanRecord(pathname, "", fi, nil, func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(data)), nil
 	})
 	return nil
 }
 
-func (g *GitHubImporter) emitGitArchive(ctx context.Context, repoName string, records chan<- *connectors.Record) error {
+func (g *GitHubImporter) emitGitArchive(ctx context.Context, repoName string, ch chan<- *importer.ScanResult) error {
 	archiveURL, _, err := g.client.Repositories.GetArchiveLink(ctx, g.owner, repoName, github.Tarball, &github.RepositoryContentGetOptions{}, 5)
 	if err != nil {
 		return fmt.Errorf("github: getting archive link for %s: %w", repoName, err)
@@ -140,7 +135,7 @@ func (g *GitHubImporter) emitGitArchive(ctx context.Context, repoName string, re
 		Lmode:    0o444,
 		LmodTime: time.Now(),
 	}
-	records <- connectors.NewRecord(repoName+"/git.tar.gz", "", fi, nil, func() (io.ReadCloser, error) {
+	ch <- importer.NewScanRecord(repoName+"/git.tar.gz", "", fi, nil, func() (io.ReadCloser, error) {
 		rc, err := client.Client().Get(urlStr)
 		if err != nil {
 			return nil, err
@@ -150,7 +145,7 @@ func (g *GitHubImporter) emitGitArchive(ctx context.Context, repoName string, re
 	return nil
 }
 
-func (g *GitHubImporter) emitIssues(ctx context.Context, repoName string, records chan<- *connectors.Record) error {
+func (g *GitHubImporter) emitIssues(ctx context.Context, repoName string, ch chan<- *importer.ScanResult) error {
 	issues, err := ListIssues(ctx, g.client, g.owner, repoName)
 	if err != nil {
 		return fmt.Errorf("github: listing issues for %s: %w", repoName, err)
@@ -163,7 +158,7 @@ func (g *GitHubImporter) emitIssues(ctx context.Context, repoName string, record
 		}
 		pathname := fmt.Sprintf("%s/issues/%d.json", repoName, issue.GetNumber())
 		name := fmt.Sprintf("%d.json", issue.GetNumber())
-		if err := g.emitJSON(pathname, name, issue, issue.GetUpdatedAt().Time, records); err != nil {
+		if err := g.emitJSON(pathname, name, issue, issue.GetUpdatedAt().Time, ch); err != nil {
 			return err
 		}
 	}
@@ -183,3 +178,6 @@ func ParseLocation(loc string) (owner, repo string) {
 	}
 	return
 }
+
+// Flags returns the location flags for this importer (0 = remote API).
+func (g *GitHubImporter) Flags() location.Flags { return 0 }

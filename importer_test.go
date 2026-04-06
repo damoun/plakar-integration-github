@@ -9,9 +9,10 @@ import (
 	"os"
 	"testing"
 
-	"github.com/PlakarKorp/kloset/connectors"
 	plakar_github "github.com/damoun/plakar-github"
 	"github.com/google/go-github/v71/github"
+
+	"github.com/PlakarKorp/kloset/snapshot/importer"
 )
 
 // newTestClient returns a GitHub client pointed at a test HTTP server.
@@ -34,7 +35,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 
 func TestNewImporter_MissingToken(t *testing.T) {
 	ctx := context.Background()
-	_, err := plakar_github.NewImporter(ctx, &connectors.Options{}, "github", map[string]string{
+	_, err := plakar_github.NewImporter(ctx, &importer.Options{}, "github", map[string]string{
 		"location": "github://testowner",
 	})
 	if err == nil {
@@ -44,7 +45,7 @@ func TestNewImporter_MissingToken(t *testing.T) {
 
 func TestNewImporter_MissingOwner(t *testing.T) {
 	ctx := context.Background()
-	_, err := plakar_github.NewImporter(ctx, &connectors.Options{}, "github", map[string]string{
+	_, err := plakar_github.NewImporter(ctx, &importer.Options{}, "github", map[string]string{
 		"token":    "ghp_test",
 		"location": "github://",
 	})
