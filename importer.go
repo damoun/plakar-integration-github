@@ -22,7 +22,6 @@ type GitHubImporter struct {
 	repo   string
 }
 
-// NewGitHubImporter creates a GitHubImporter directly (used in tests).
 func NewGitHubImporter(client *github.Client, owner, repo string) *GitHubImporter {
 	return &GitHubImporter{client: client, owner: owner, repo: repo}
 }
