@@ -1,0 +1,24 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - godot
+    - misspell
+    - bodyclose
+    - gosec
+
+  settings:
+    godot:
+      scope: declarations
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - godot
+        - gosec
