@@ -22,6 +22,11 @@ type GitHubImporter struct {
 	repo   string
 }
 
+// NewGitHubImporter creates a GitHubImporter directly (used in tests).
+func NewGitHubImporter(client *github.Client, owner, repo string) *GitHubImporter {
+	return &GitHubImporter{client: client, owner: owner, repo: repo}
+}
+
 // NewImporter is the constructor called by the plakar SDK.
 func NewImporter(ctx context.Context, _ *importer.Options, _ string, config map[string]string) (importer.Importer, error) {
 	token := config["token"]

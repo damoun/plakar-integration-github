@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -127,6 +128,194 @@ func TestParseLocation(t *testing.T) {
 			t.Errorf("ParseLocation(%q) = (%q, %q), want (%q, %q)",
 				c.input, owner, repo, c.wantOwner, c.wantRepo)
 		}
+	}
+}
+
+func TestIsOrg_User(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v3/users/alice", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]any{"login": "alice", "type": "User"})
+	})
+	_, client := newTestClient(t, mux)
+
+	org, err := plakar_github.IsOrg(context.Background(), client, "alice")
+	if err != nil {
+		t.Fatalf("IsOrg: %v", err)
+	}
+	if org {
+		t.Error("expected user, got org")
+	}
+}
+
+func TestIsOrg_Org(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v3/users/myorg", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]any{"login": "myorg", "type": "Organization"})
+	})
+	_, client := newTestClient(t, mux)
+
+	org, err := plakar_github.IsOrg(context.Background(), client, "myorg")
+	if err != nil {
+		t.Fatalf("IsOrg: %v", err)
+	}
+	if !org {
+		t.Error("expected org, got user")
+	}
+}
+
+func TestImporterMethods(t *testing.T) {
+	ctx := context.Background()
+	imp, err := plakar_github.NewImporter(ctx, &importer.Options{}, "github", map[string]string{
+		"token":    "ghp_test",
+		"location": "github://alice",
+	})
+	if err != nil {
+		t.Fatalf("NewImporter: %v", err)
+	}
+
+	if v, err := imp.Origin(ctx); err != nil || v != "github.com" {
+		t.Errorf("Origin() = %q, %v", v, err)
+	}
+	if v, err := imp.Type(ctx); err != nil || v != "github" {
+		t.Errorf("Type() = %q, %v", v, err)
+	}
+	if v, err := imp.Root(ctx); err != nil || v != "alice" {
+		t.Errorf("Root() = %q, %v", v, err)
+	}
+	if err := imp.Close(ctx); err != nil {
+		t.Errorf("Close() = %v", err)
+	}
+}
+
+func TestNewImporter_OwnerOverride(t *testing.T) {
+	ctx := context.Background()
+	imp, err := plakar_github.NewImporter(ctx, &importer.Options{}, "github", map[string]string{
+		"token":    "ghp_test",
+		"location": "github://ignored",
+		"owner":    "explicit",
+		"repo":     "myrepo",
+	})
+	if err != nil {
+		t.Fatalf("NewImporter: %v", err)
+	}
+	if v, _ := imp.Root(ctx); v != "explicit" {
+		t.Errorf("Root() = %q, want %q", v, "explicit")
+	}
+}
+
+func TestScan_SingleRepo(t *testing.T) {
+	mux := http.NewServeMux()
+
+	// Repo metadata
+	mux.HandleFunc("/api/v3/repos/alice/repo-a", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]any{"id": 1, "name": "repo-a", "full_name": "alice/repo-a"})
+	})
+	// Issues
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/issues", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, []map[string]any{
+			{"id": 1, "number": 1, "title": "Bug", "state": "open"},
+		})
+	})
+	srv, client := newTestClient(t, mux)
+
+	// Archive link — return 302 to an absolute URL on the same server
+	mux.HandleFunc("/archive/repo-a.tar.gz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/gzip")
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/tarball", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, srv.URL+"/archive/repo-a.tar.gz", http.StatusFound)
+	})
+	_ = srv
+
+	ctx := context.Background()
+	imp := plakar_github.NewGitHubImporter(client, "alice", "repo-a")
+
+	ch, err := imp.Scan(ctx)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+
+	var paths []string
+	for result := range ch {
+		if result.Error != nil {
+			t.Errorf("scan error: %v", result.Error.Err)
+			continue
+		}
+		// Exercise lazy readers (covers emitGitArchive's fetch func)
+		if result.Record.Reader != nil {
+			_, _ = io.ReadAll(result.Record.Reader)
+			result.Record.Reader.Close()
+		}
+		paths = append(paths, result.Record.Pathname)
+	}
+
+	want := map[string]bool{
+		"repo-a/manifest.json": false,
+		"repo-a/git.tar.gz":    false,
+		"repo-a/issues/1.json": false,
+	}
+	for _, p := range paths {
+		want[p] = true
+	}
+	for path, found := range want {
+		if !found {
+			t.Errorf("missing path in scan results: %s", path)
+		}
+	}
+}
+
+func TestFlags(t *testing.T) {
+	imp := plakar_github.NewGitHubImporter(nil, "alice", "")
+	if imp.Flags() != 0 {
+		t.Errorf("Flags() = %v, want 0", imp.Flags())
+	}
+}
+
+func TestScan_AllRepos(t *testing.T) {
+	mux := http.NewServeMux()
+
+	// IsOrg
+	mux.HandleFunc("/api/v3/users/alice", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]any{"login": "alice", "type": "User"})
+	})
+	// ListRepos
+	mux.HandleFunc("/api/v3/users/alice/repos", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, []map[string]any{
+			{"id": 1, "name": "repo-a", "full_name": "alice/repo-a"},
+		})
+	})
+	// Issues (no issues)
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/issues", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, []map[string]any{})
+	})
+
+	srv, client := newTestClient(t, mux)
+
+	mux.HandleFunc("/archive/repo-a.tar.gz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/tarball", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, srv.URL+"/archive/repo-a.tar.gz", http.StatusFound)
+	})
+
+	imp := plakar_github.NewGitHubImporter(client, "alice", "")
+	ch, err := imp.Scan(context.Background())
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+
+	var paths []string
+	for result := range ch {
+		if result.Error != nil {
+			t.Errorf("scan error: %v", result.Error.Err)
+			continue
+		}
+		paths = append(paths, result.Record.Pathname)
+	}
+
+	if len(paths) == 0 {
+		t.Error("expected at least one path from Scan")
 	}
 }
 
