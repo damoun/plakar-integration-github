@@ -147,7 +147,7 @@ func (g *GitHubImporter) emitGitArchive(ctx context.Context, repoName string, ch
 			return nil, err
 		}
 		if rc.StatusCode < 200 || rc.StatusCode >= 300 {
-			rc.Body.Close()
+			_ = rc.Body.Close()
 			return nil, fmt.Errorf("github: archive download returned HTTP %d", rc.StatusCode)
 		}
 		return rc.Body, nil

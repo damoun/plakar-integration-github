@@ -71,6 +71,6 @@ Records are emitted via `importer.NewScanRecord(pathname, target, fileInfo, xatt
 
 ### Location parsing
 
-`github://owner` → all repos for owner (user or org, auto-detected via API)  
-`github://owner/repo` → single repo  
+`github://owner` → all repos for owner (user or org, auto-detected via API)
+`github://owner/repo` → single repo
 Owner/repo can also be passed via explicit `owner=` / `repo=` config keys.

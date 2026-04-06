@@ -235,7 +235,7 @@ func TestScan_SingleRepo(t *testing.T) {
 		}
 		if result.Record.Reader != nil {
 			func() {
-				defer result.Record.Reader.Close()
+				defer result.Record.Reader.Close() //nolint:errcheck
 				_, _ = io.ReadAll(result.Record.Reader)
 			}()
 		}

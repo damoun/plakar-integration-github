@@ -6,5 +6,7 @@ import (
 )
 
 func init() {
-	importer.Register("github", location.Flags(0), NewImporter)
+	if err := importer.Register("github", location.Flags(0), NewImporter); err != nil {
+		panic(err)
+	}
 }
