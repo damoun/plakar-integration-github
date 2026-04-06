@@ -4,7 +4,7 @@ import (
 	"os"
 
 	sdk "github.com/PlakarKorp/go-kloset-sdk"
-	connector "github.com/damoun/plakar-github"
+	connector "github.com/damoun/plakar-integration-github"
 )
 
 func main() {

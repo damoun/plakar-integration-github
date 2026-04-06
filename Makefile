@@ -6,10 +6,10 @@ EXT ?=
 all: build
 
 build:
-	$(GO) build -v -o plakar-github-importer$(EXT) ./importer
+	$(GO) build -v -o integration-github-importer$(EXT) ./importer
 
 test:
 	$(GO) test -v ./...
 
 clean:
-	rm -f plakar-github-importer$(EXT)
+	rm -f integration-github-importer$(EXT)

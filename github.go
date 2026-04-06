@@ -1,4 +1,4 @@
-package plakar_github
+package integration_github
 
 import (
 	"context"

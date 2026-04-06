@@ -1,13 +1,13 @@
-name: plakar-github
+name: integration-github
 display_name: GitHub
 description: "Backup GitHub repositories, issues, and file history"
 version: v0.0.1
 api_version: 1.0.0
-homepage: https://github.com/damoun/plakar-github
+homepage: https://github.com/damoun/plakar-integration-github
 license: ISC
 
 connectors:
   - type: importer
     protocols:
       - github
-    executable: plakar-github-importer
+    executable: integration-github-importer

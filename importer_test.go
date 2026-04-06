@@ -1,4 +1,4 @@
-package plakar_github_test
+package integration_github_test
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"os"
 	"testing"
 
-	plakar_github "github.com/damoun/plakar-github"
+	integration_github "github.com/damoun/plakar-integration-github"
 	"github.com/google/go-github/v71/github"
 
 	"github.com/PlakarKorp/kloset/snapshot/importer"
@@ -36,7 +36,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 
 func TestNewImporter_MissingToken(t *testing.T) {
 	ctx := context.Background()
-	_, err := plakar_github.NewImporter(ctx, &importer.Options{}, "github", map[string]string{
+	_, err := integration_github.NewImporter(ctx, &importer.Options{}, "github", map[string]string{
 		"location": "github://testowner",
 	})
 	if err == nil {
@@ -46,7 +46,7 @@ func TestNewImporter_MissingToken(t *testing.T) {
 
 func TestNewImporter_MissingOwner(t *testing.T) {
 	ctx := context.Background()
-	_, err := plakar_github.NewImporter(ctx, &importer.Options{}, "github", map[string]string{
+	_, err := integration_github.NewImporter(ctx, &importer.Options{}, "github", map[string]string{
 		"token":    "ghp_test",
 		"location": "github://",
 	})
@@ -65,7 +65,7 @@ func TestListRepos_User(t *testing.T) {
 	})
 	_, client := newTestClient(t, mux)
 
-	repos, err := plakar_github.ListRepos(context.Background(), client, "alice", false)
+	repos, err := integration_github.ListRepos(context.Background(), client, "alice", false)
 	if err != nil {
 		t.Fatalf("listRepos: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestListRepos_Org(t *testing.T) {
 	})
 	_, client := newTestClient(t, mux)
 
-	repos, err := plakar_github.ListRepos(context.Background(), client, "myorg", true)
+	repos, err := integration_github.ListRepos(context.Background(), client, "myorg", true)
 	if err != nil {
 		t.Fatalf("listRepos org: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestListIssues(t *testing.T) {
 	})
 	_, client := newTestClient(t, mux)
 
-	issues, err := plakar_github.ListIssues(context.Background(), client, "alice", "repo-a")
+	issues, err := integration_github.ListIssues(context.Background(), client, "alice", "repo-a")
 	if err != nil {
 		t.Fatalf("listIssues: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestParseLocation(t *testing.T) {
 		{"alice/myrepo", "alice", "myrepo"},
 	}
 	for _, c := range cases {
-		owner, repo := plakar_github.ParseLocation(c.input)
+		owner, repo := integration_github.ParseLocation(c.input)
 		if owner != c.wantOwner || repo != c.wantRepo {
 			t.Errorf("ParseLocation(%q) = (%q, %q), want (%q, %q)",
 				c.input, owner, repo, c.wantOwner, c.wantRepo)
@@ -148,7 +148,7 @@ func TestIsOrg(t *testing.T) {
 			})
 			_, client := newTestClient(t, mux)
 
-			org, err := plakar_github.IsOrg(context.Background(), client, c.owner)
+			org, err := integration_github.IsOrg(context.Background(), client, c.owner)
 			if err != nil {
 				t.Fatalf("IsOrg: %v", err)
 			}
@@ -161,7 +161,7 @@ func TestIsOrg(t *testing.T) {
 
 func TestImporterMethods(t *testing.T) {
 	ctx := context.Background()
-	imp, err := plakar_github.NewImporter(ctx, &importer.Options{}, "github", map[string]string{
+	imp, err := integration_github.NewImporter(ctx, &importer.Options{}, "github", map[string]string{
 		"token":    "ghp_test",
 		"location": "github://alice",
 	})
@@ -185,7 +185,7 @@ func TestImporterMethods(t *testing.T) {
 
 func TestNewImporter_OwnerOverride(t *testing.T) {
 	ctx := context.Background()
-	imp, err := plakar_github.NewImporter(ctx, &importer.Options{}, "github", map[string]string{
+	imp, err := integration_github.NewImporter(ctx, &importer.Options{}, "github", map[string]string{
 		"token":    "ghp_test",
 		"location": "github://ignored",
 		"owner":    "explicit",
@@ -220,7 +220,7 @@ func TestScan_SingleRepo(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	imp := plakar_github.NewGitHubImporter(client, "alice", "repo-a")
+	imp := integration_github.NewGitHubImporter(client, "alice", "repo-a")
 
 	ch, err := imp.Scan(ctx)
 	if err != nil {
@@ -258,7 +258,7 @@ func TestScan_SingleRepo(t *testing.T) {
 }
 
 func TestFlags(t *testing.T) {
-	imp := plakar_github.NewGitHubImporter(nil, "alice", "")
+	imp := integration_github.NewGitHubImporter(nil, "alice", "")
 	if imp.Flags() != 0 {
 		t.Errorf("Flags() = %v, want 0", imp.Flags())
 	}
@@ -291,7 +291,7 @@ func TestScan_AllRepos(t *testing.T) {
 		http.Redirect(w, r, srv.URL+"/archive/repo-a.tar.gz", http.StatusFound)
 	})
 
-	imp := plakar_github.NewGitHubImporter(client, "alice", "")
+	imp := integration_github.NewGitHubImporter(client, "alice", "")
 	ch, err := imp.Scan(context.Background())
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -321,14 +321,14 @@ func TestIntegration_ListRepos(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	client := plakar_github.NewGitHubClient(ctx, token)
+	client := integration_github.NewGitHubClient(ctx, token)
 
-	org, err := plakar_github.IsOrg(ctx, client, owner)
+	org, err := integration_github.IsOrg(ctx, client, owner)
 	if err != nil {
 		t.Fatalf("IsOrg: %v", err)
 	}
 
-	repos, err := plakar_github.ListRepos(ctx, client, owner, org)
+	repos, err := integration_github.ListRepos(ctx, client, owner, org)
 	if err != nil {
 		t.Fatalf("ListRepos: %v", err)
 	}

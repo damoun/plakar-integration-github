@@ -19,11 +19,11 @@ A [plakar](https://github.com/PlakarKorp/plakar) importer for GitHub — backs u
 Build from source:
 
 ```sh
-git clone https://github.com/damoun/plakar-github
+git clone https://github.com/damoun/plakar-integration-github
 cd plakar-github
 make build
 plakar pkg create manifest.yaml
-plakar pkg add ./plakar-github_v0.0.1_darwin_arm64.ptar
+plakar pkg add ./integration-github_v0.0.1_darwin_arm64.ptar
 ```
 
 ## Configuration
@@ -52,7 +52,7 @@ plakar at /path/to/repo backup @mygithub
 Backup a single repository:
 
 ```sh
-plakar source add myrepo "github://damoun/plakar-github" token=ghp_xxx
+plakar source add myrepo "github://damoun/plakar-integration-github" token=ghp_xxx
 plakar at /path/to/repo backup @myrepo
 ```
 

@@ -1,4 +1,4 @@
-module github.com/damoun/plakar-github
+module github.com/damoun/plakar-integration-github
 
 go 1.24.0
 
