@@ -1,4 +1,4 @@
-# plakar-github
+# plakar-integration-github
 
 A [plakar](https://github.com/PlakarKorp/plakar) importer for GitHub — backs up repositories (git history and files) and issues for both personal accounts and organizations.
 
@@ -20,7 +20,7 @@ Build from source:
 
 ```sh
 git clone https://github.com/damoun/plakar-integration-github
-cd plakar-github
+cd plakar-integration-github
 make build
 plakar pkg create manifest.yaml
 plakar pkg add ./integration-github_v0.0.1_darwin_arm64.ptar
