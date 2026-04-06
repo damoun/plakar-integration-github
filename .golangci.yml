@@ -16,7 +16,6 @@ linters:
     godot:
       scope: declarations
 
-issues:
   exclusions:
     rules:
       - path: _test\.go
