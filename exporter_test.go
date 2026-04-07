@@ -137,6 +137,10 @@ func TestHandleIssue_Open(t *testing.T) {
 	mux := http.NewServeMux()
 	var createdTitle string
 	mux.HandleFunc("/api/v3/repos/alice/repo-a/issues", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			writeJSON(w, []any{})
+			return
+		}
 		var req map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		createdTitle = req["title"].(string)
@@ -164,7 +168,11 @@ func TestHandleIssue_Open(t *testing.T) {
 func TestHandleIssue_Closed(t *testing.T) {
 	mux := http.NewServeMux()
 	editCalled := false
-	mux.HandleFunc("/api/v3/repos/alice/repo-a/issues", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/issues", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			writeJSON(w, []any{})
+			return
+		}
 		w.WriteHeader(http.StatusCreated)
 		writeJSON(w, map[string]any{"id": 1, "number": 10, "state": "open"})
 	})
@@ -268,6 +276,10 @@ func TestHandleIssue_WithLabels(t *testing.T) {
 	mux := http.NewServeMux()
 	var gotLabels []string
 	mux.HandleFunc("/api/v3/repos/alice/repo-a/issues", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			writeJSON(w, []any{})
+			return
+		}
 		var req map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		if labels, ok := req["labels"].([]any); ok {
@@ -294,5 +306,97 @@ func TestHandleIssue_WithLabels(t *testing.T) {
 	}
 	if len(gotLabels) != 2 || gotLabels[0] != "bug" {
 		t.Errorf("labels = %v, want [bug enhancement]", gotLabels)
+	}
+}
+
+func TestHandleIssue_DuplicateSkipped(t *testing.T) {
+	mux := http.NewServeMux()
+	createCalled := false
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/issues", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			writeJSON(w, []any{map[string]any{"id": 1, "number": 1, "title": "Existing issue", "state": "open"}})
+			return
+		}
+		createCalled = true
+		w.WriteHeader(http.StatusCreated)
+		writeJSON(w, map[string]any{"id": 2, "number": 2, "state": "open"})
+	})
+	_, client := newTestClient(t, mux)
+
+	exp := integration_github.NewGitHubExporter(client, "alice", "")
+	issue := github.Issue{
+		Number: github.Ptr(1),
+		Title:  github.Ptr("Existing issue"),
+		Body:   github.Ptr("body"),
+		State:  github.Ptr("open"),
+	}
+	body, _ := json.Marshal(issue)
+	if err := exp.StoreFile(context.Background(), "repo-a/issues/1.json", bytes.NewReader(body), int64(len(body))); err != nil {
+		t.Fatalf("StoreFile: %v", err)
+	}
+	if createCalled {
+		t.Error("expected duplicate issue to be skipped")
+	}
+}
+
+func TestHandleGitArchive_EmptyRepo(t *testing.T) {
+	mux := http.NewServeMux()
+	blobAttempts := 0
+	initCalled := false
+
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/blobs", func(w http.ResponseWriter, _ *http.Request) {
+		blobAttempts++
+		if blobAttempts == 1 {
+			w.WriteHeader(http.StatusConflict) // 409 empty repo
+			writeJSON(w, map[string]any{"message": "Git Repository is empty."})
+			return
+		}
+		writeJSON(w, map[string]any{"sha": "abc123"})
+	})
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/contents/.gitkeep", func(w http.ResponseWriter, _ *http.Request) {
+		initCalled = true
+		w.WriteHeader(http.StatusCreated)
+		writeJSON(w, map[string]any{"content": map[string]any{"sha": "def456"}})
+	})
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/ref/heads/main", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/trees", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]any{"sha": "tree123"})
+	})
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/commits", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]any{"sha": "commit123"})
+	})
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/refs", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]any{"ref": "refs/heads/main"})
+	})
+	_, client := newTestClient(t, mux)
+
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+	content := []byte("hello")
+	_ = tw.WriteHeader(&tar.Header{Name: "prefix/README.md", Size: int64(len(content)), Typeflag: tar.TypeReg})
+	_, _ = tw.Write(content)
+	_ = tw.Close()
+	_ = gw.Close()
+
+	exp := integration_github.NewGitHubExporter(client, "alice", "")
+	if err := exp.StoreFile(context.Background(), "repo-a/git.tar.gz", &buf, int64(buf.Len())); err != nil {
+		t.Fatalf("StoreFile empty repo: %v", err)
+	}
+	if !initCalled {
+		t.Error("expected .gitkeep init call for empty repo")
+	}
+}
+
+func TestNewExporter_ForceFlag(t *testing.T) {
+	_, err := integration_github.NewExporter(context.Background(), &exporter.Options{}, "github", map[string]string{
+		"token":    "ghp_test",
+		"location": "github://alice",
+		"force":    "true",
+	})
+	if err != nil {
+		t.Fatalf("NewExporter with force=true: %v", err)
 	}
 }

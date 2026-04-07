@@ -9,6 +9,7 @@ import (
 	"io"
 	"path"
 	"strings"
+	"sync"
 
 	"github.com/PlakarKorp/kloset/objects"
 	kloset_exporter "github.com/PlakarKorp/kloset/snapshot/exporter"
@@ -20,6 +21,11 @@ type GitHubExporter struct {
 	client       *github.Client
 	owner        string
 	repoOverride string
+	force        bool
+
+	// existingIssues caches issue titles per repo to skip duplicates when force=false.
+	existingIssues   map[string]map[string]bool
+	existingIssuesMu sync.Mutex
 }
 
 // NewExporter is the constructor called by the plakar SDK.
@@ -41,15 +47,22 @@ func NewExporter(ctx context.Context, _ *kloset_exporter.Options, _ string, conf
 	}
 
 	return &GitHubExporter{
-		client:       NewGitHubClient(ctx, token),
-		owner:        owner,
-		repoOverride: repo,
+		client:         NewGitHubClient(ctx, token),
+		owner:          owner,
+		repoOverride:   repo,
+		force:          config["force"] == "true",
+		existingIssues: make(map[string]map[string]bool),
 	}, nil
 }
 
 // NewGitHubExporter creates an exporter directly from an existing client (used in tests).
 func NewGitHubExporter(client *github.Client, owner, repoOverride string) *GitHubExporter {
-	return &GitHubExporter{client: client, owner: owner, repoOverride: repoOverride}
+	return &GitHubExporter{
+		client:         client,
+		owner:          owner,
+		repoOverride:   repoOverride,
+		existingIssues: make(map[string]map[string]bool),
+	}
 }
 
 func (e *GitHubExporter) Root(_ context.Context) (string, error)            { return e.owner, nil }
@@ -64,6 +77,8 @@ func (e *GitHubExporter) Close(_ context.Context) error { return nil }
 
 // StoreFile dispatches based on the pathname suffix.
 func (e *GitHubExporter) StoreFile(ctx context.Context, pathname string, fp io.Reader, _ int64) error {
+	// Strip leading slash if present (plakar may pass absolute paths).
+	pathname = strings.TrimPrefix(pathname, "/")
 	base := path.Base(pathname)
 	parts := strings.SplitN(pathname, "/", 3)
 	if len(parts) < 2 {
@@ -112,6 +127,7 @@ func (e *GitHubExporter) handleManifest(ctx context.Context, repoName string, r 
 }
 
 func (e *GitHubExporter) handleGitArchive(ctx context.Context, repoName string, r io.Reader) error {
+
 	gr, err := gzip.NewReader(r)
 	if err != nil {
 		return fmt.Errorf("github: opening gzip archive for %s: %w", repoName, err)
@@ -157,13 +173,30 @@ func (e *GitHubExporter) handleGitArchive(ctx context.Context, repoName string, 
 	}
 
 	// Create blobs and build tree entries.
+	// Try the first blob; if GitHub returns 409 (empty repo), bootstrap via Contents API first.
 	var entries []*github.TreeEntry
+	bootstrapped := false
 	for _, f := range files {
 		encoded := string(f.content)
-		blob, _, err := e.client.Git.CreateBlob(ctx, e.owner, repoName, &github.Blob{
+		blob, resp, err := e.client.Git.CreateBlob(ctx, e.owner, repoName, &github.Blob{
 			Content:  github.Ptr(encoded),
 			Encoding: github.Ptr("utf-8"),
 		})
+		if err != nil && !bootstrapped && resp != nil && resp.StatusCode == 409 {
+			// Repo git store not yet initialized — seed with an empty commit via Contents API.
+			_, _, initErr := e.client.Repositories.CreateFile(ctx, e.owner, repoName, ".gitkeep", &github.RepositoryContentFileOptions{
+				Message: github.Ptr("init"),
+				Content: []byte{},
+			})
+			if initErr != nil {
+				return fmt.Errorf("github: initializing repo %s: %w", repoName, initErr)
+			}
+			bootstrapped = true
+			blob, _, err = e.client.Git.CreateBlob(ctx, e.owner, repoName, &github.Blob{
+				Content:  github.Ptr(encoded),
+				Encoding: github.Ptr("utf-8"),
+			})
+		}
 		if err != nil {
 			// Fall back to base64 encoding for binary files.
 			blob, _, err = e.client.Git.CreateBlob(ctx, e.owner, repoName, &github.Blob{
@@ -188,16 +221,11 @@ func (e *GitHubExporter) handleGitArchive(ctx context.Context, repoName string, 
 	}
 
 	// Get current HEAD commit if the repo has one.
-	var parentSHAs []string
-	ref, _, err := e.client.Git.GetRef(ctx, e.owner, repoName, "refs/heads/main")
-	if err == nil && ref.Object != nil {
-		parentSHAs = []string{ref.Object.GetSHA()}
-	}
-
 	var parents []*github.Commit
-	for _, sha := range parentSHAs {
-		s := sha
-		parents = append(parents, &github.Commit{SHA: &s})
+	existingRef, _, _ := e.client.Git.GetRef(ctx, e.owner, repoName, "refs/heads/main")
+	if existingRef != nil && existingRef.Object != nil {
+		sha := existingRef.Object.GetSHA()
+		parents = []*github.Commit{{SHA: &sha}}
 	}
 
 	commit, _, err := e.client.Git.CreateCommit(ctx, e.owner, repoName, &github.Commit{
@@ -210,13 +238,37 @@ func (e *GitHubExporter) handleGitArchive(ctx context.Context, repoName string, 
 	}
 
 	refName := "refs/heads/main"
-	_, _, err = e.client.Git.UpdateRef(ctx, e.owner, repoName, &github.Reference{
-		Ref:    &refName,
-		Object: &github.GitObject{SHA: commit.SHA},
-	}, true)
-	if err != nil {
-		return fmt.Errorf("github: updating ref for %s: %w", repoName, err)
+	if existingRef == nil {
+		// Ref doesn't exist yet (empty repo) — create it.
+		_, _, err = e.client.Git.CreateRef(ctx, e.owner, repoName, &github.Reference{
+			Ref:    &refName,
+			Object: &github.GitObject{SHA: commit.SHA},
+		})
+	} else {
+		_, _, err = e.client.Git.UpdateRef(ctx, e.owner, repoName, &github.Reference{
+			Ref:    github.Ptr(refName),
+			Object: &github.GitObject{SHA: commit.SHA},
+		}, true)
 	}
+	if err != nil {
+		return fmt.Errorf("github: setting ref for %s: %w", repoName, err)
+	}
+	return nil
+}
+
+func (e *GitHubExporter) loadExistingIssues(ctx context.Context, repoName string) error {
+	issues, _, err := e.client.Issues.ListByRepo(ctx, e.owner, repoName, &github.IssueListByRepoOptions{
+		State:       "all",
+		ListOptions: github.ListOptions{PerPage: 100},
+	})
+	if err != nil {
+		return fmt.Errorf("github: listing issues for %s: %w", repoName, err)
+	}
+	titles := make(map[string]bool, len(issues))
+	for _, i := range issues {
+		titles[i.GetTitle()] = true
+	}
+	e.existingIssues[repoName] = titles
 	return nil
 }
 
@@ -224,6 +276,21 @@ func (e *GitHubExporter) handleIssue(ctx context.Context, repoName string, r io.
 	var issue github.Issue
 	if err := json.NewDecoder(r).Decode(&issue); err != nil {
 		return fmt.Errorf("github: decoding issue for %s: %w", repoName, err)
+	}
+
+	if !e.force {
+		e.existingIssuesMu.Lock()
+		if _, loaded := e.existingIssues[repoName]; !loaded {
+			if err := e.loadExistingIssues(ctx, repoName); err != nil {
+				e.existingIssuesMu.Unlock()
+				return err
+			}
+		}
+		if e.existingIssues[repoName][issue.GetTitle()] {
+			e.existingIssuesMu.Unlock()
+			return nil
+		}
+		e.existingIssuesMu.Unlock()
 	}
 
 	body := issue.GetBody()
