@@ -437,3 +437,132 @@ func TestNewExporter_ForceFlag(t *testing.T) {
 		t.Fatalf("NewExporter with force=true: %v", err)
 	}
 }
+
+func TestHandleManifest_403(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v3/repos/alice/repo-a", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		writeJSON(w, map[string]any{"message": "Not Found"})
+	})
+	mux.HandleFunc("/api/v3/user/repos", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		writeJSON(w, map[string]any{"message": "Resource not accessible by personal access token"})
+	})
+	_, client := newTestClient(t, mux)
+
+	exp := integration_github.NewGitHubExporter(client, "alice", "")
+	body, _ := json.Marshal(map[string]any{"name": "repo-a", "private": false})
+	err := exp.StoreFile(context.Background(), "repo-a/manifest.json", bytes.NewReader(body), int64(len(body)))
+	if err == nil {
+		t.Fatal("expected error on 403 creating repo")
+	}
+	if !strings.Contains(err.Error(), "permission denied") {
+		t.Errorf("expected 'permission denied' in error, got: %v", err)
+	}
+}
+
+func TestHandleManifest_401(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v3/repos/alice/repo-a", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		writeJSON(w, map[string]any{"message": "Bad credentials"})
+	})
+	_, client := newTestClient(t, mux)
+
+	exp := integration_github.NewGitHubExporter(client, "alice", "")
+	body, _ := json.Marshal(map[string]any{"name": "repo-a", "private": false})
+	err := exp.StoreFile(context.Background(), "repo-a/manifest.json", bytes.NewReader(body), int64(len(body)))
+	if err == nil {
+		t.Fatal("expected error on 401 checking repo")
+	}
+	if !strings.Contains(err.Error(), "authentication failed") {
+		t.Errorf("expected 'authentication failed' in error, got: %v", err)
+	}
+}
+
+func TestHandleIssue_403(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/issues", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			writeJSON(w, []any{})
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		writeJSON(w, map[string]any{"message": "Resource not accessible by personal access token"})
+	})
+	_, client := newTestClient(t, mux)
+
+	exp := integration_github.NewGitHubExporter(client, "alice", "")
+	issue := github.Issue{
+		Number: github.Ptr(1),
+		Title:  github.Ptr("Test issue"),
+		Body:   github.Ptr("body"),
+		State:  github.Ptr("open"),
+	}
+	body, _ := json.Marshal(issue)
+	err := exp.StoreFile(context.Background(), "repo-a/issues/1.json", bytes.NewReader(body), int64(len(body)))
+	if err == nil {
+		t.Fatal("expected error on 403 creating issue")
+	}
+	if !strings.Contains(err.Error(), "permission denied") {
+		t.Errorf("expected 'permission denied' in error, got: %v", err)
+	}
+}
+
+func TestHandleGitArchive_403WorkflowFiltered(t *testing.T) {
+	mux := http.NewServeMux()
+	treeAttempts := 0
+
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/ref/heads/main", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/refs", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]any{"ref": "refs/heads/main"})
+	})
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/trees", func(w http.ResponseWriter, _ *http.Request) {
+		treeAttempts++
+		if treeAttempts == 1 {
+			w.WriteHeader(http.StatusForbidden)
+			writeJSON(w, map[string]any{"message": "Resource not accessible by personal access token"})
+			return
+		}
+		writeJSON(w, map[string]any{"sha": "tree123456789012345678901234567890123456789"})
+	})
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/commits", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]any{"sha": "commit123"})
+	})
+	_, client := newTestClient(t, mux)
+
+	// Build archive with a workflow file and a regular file.
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+	for _, name := range []string{"prefix/README.md", "prefix/.github/workflows/ci.yml"} {
+		content := []byte("content")
+		_ = tw.WriteHeader(&tar.Header{Name: name, Size: int64(len(content)), Typeflag: tar.TypeReg})
+		_, _ = tw.Write(content)
+	}
+	_ = tw.Close()
+	_ = gw.Close()
+
+	exp := integration_github.NewGitHubExporter(client, "alice", "")
+	if err := exp.StoreFile(context.Background(), "repo-a/git.tar.gz", &buf, int64(buf.Len())); err != nil {
+		t.Fatalf("expected success after filtering workflow files, got: %v", err)
+	}
+	if treeAttempts != 2 {
+		t.Errorf("expected 2 tree attempts (first 403, then retry), got %d", treeAttempts)
+	}
+}
+
+func TestHandleGitArchive_MalformedGzip(t *testing.T) {
+	_, client := newTestClient(t, http.NewServeMux())
+
+	exp := integration_github.NewGitHubExporter(client, "alice", "")
+	err := exp.StoreFile(context.Background(), "repo-a/git.tar.gz", strings.NewReader("not gzip data"), 13)
+	if err == nil {
+		t.Fatal("expected error for malformed gzip")
+	}
+	if !strings.Contains(err.Error(), "opening gzip archive") {
+		t.Errorf("expected 'opening gzip archive' in error, got: %v", err)
+	}
+}

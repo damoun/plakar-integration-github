@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"path"
 	"strings"
 	"sync"
@@ -101,6 +102,12 @@ func (e *GitHubExporter) handleManifest(ctx context.Context, repoName string, r 
 		return nil // repo already exists
 	}
 	if resp == nil || resp.StatusCode != 404 {
+		if resp != nil && resp.StatusCode == 401 {
+			return fmt.Errorf("github: authentication failed checking repo %s/%s — check token validity: %w", e.owner, repoName, err)
+		}
+		if resp != nil && resp.StatusCode == 403 {
+			return fmt.Errorf("github: permission denied checking repo %s/%s — ensure token has 'repo' scope: %w", e.owner, repoName, err)
+		}
 		return fmt.Errorf("github: checking repo %s/%s: %w", e.owner, repoName, err)
 	}
 
@@ -109,8 +116,14 @@ func (e *GitHubExporter) handleManifest(ctx context.Context, repoName string, r 
 		Description: repo.Description,
 		Private:     repo.Private,
 	}
-	_, _, err = e.client.Repositories.Create(ctx, "", req)
+	_, createResp, err := e.client.Repositories.Create(ctx, "", req)
 	if err != nil {
+		if createResp != nil && createResp.StatusCode == 401 {
+			return fmt.Errorf("github: authentication failed creating repo %s — check token validity: %w", repoName, err)
+		}
+		if createResp != nil && createResp.StatusCode == 403 {
+			return fmt.Errorf("github: permission denied creating repo %s — ensure token has 'repo' scope: %w", repoName, err)
+		}
 		return fmt.Errorf("github: creating repo %s: %w", repoName, err)
 	}
 	return nil
@@ -189,10 +202,16 @@ func (e *GitHubExporter) handleGitArchive(ctx context.Context, repoName string, 
 		// Fine-grained PATs without "workflows" permission cannot push .github/workflows files.
 		// Retry without them so the rest of the repo still restores.
 		var filtered []*github.TreeEntry
+		var skipped int
 		for _, entry := range entries {
-			if !strings.HasPrefix(entry.GetPath(), ".github/workflows/") {
+			if strings.HasPrefix(entry.GetPath(), ".github/workflows/") {
+				skipped++
+			} else {
 				filtered = append(filtered, entry)
 			}
+		}
+		if skipped > 0 {
+			log.Printf("github: token lacks 'workflows' permission — skipping %d workflow file(s) for %s/%s; grant the scope to restore them", skipped, e.owner, repoName)
 		}
 		if len(filtered) > 0 {
 			tree, _, err = e.client.Git.CreateTree(ctx, e.owner, repoName, "", filtered)
@@ -295,8 +314,14 @@ func (e *GitHubExporter) handleIssue(ctx context.Context, repoName string, r io.
 		Labels: &labelNames,
 	}
 
-	created, _, err := e.client.Issues.Create(ctx, e.owner, repoName, req)
+	created, createResp, err := e.client.Issues.Create(ctx, e.owner, repoName, req)
 	if err != nil {
+		if createResp != nil && createResp.StatusCode == 401 {
+			return fmt.Errorf("github: authentication failed creating issue in %s/%s — check token validity: %w", e.owner, repoName, err)
+		}
+		if createResp != nil && createResp.StatusCode == 403 {
+			return fmt.Errorf("github: permission denied creating issue in %s/%s — ensure token has 'issues:write' scope: %w", e.owner, repoName, err)
+		}
 		return fmt.Errorf("github: creating issue in %s: %w", repoName, err)
 	}
 
