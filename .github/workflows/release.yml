@@ -51,8 +51,9 @@ jobs:
           sudo mv plakar /usr/local/bin/plakar
 
       - name: Patch manifest version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
         run: |
-          TAG="${{ github.event.release.tag_name }}"
           sed -i "s/^version:.*/version: ${TAG}/" manifest.yaml
 
       - name: Create .ptar package
@@ -81,6 +82,6 @@ jobs:
       - name: Attach .ptar files to release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload "${{ github.event.release.tag_name }}" *.ptar \
-            --repo "${{ github.repository }}"
+          TAG: ${{ github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
+        run: gh release upload "${TAG}" *.ptar --repo "${REPO}"
