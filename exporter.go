@@ -79,6 +79,8 @@ func (e *GitHubExporter) Close(_ context.Context) error { return nil }
 func (e *GitHubExporter) StoreFile(ctx context.Context, pathname string, fp io.Reader, _ int64) error {
 	// Strip leading slash if present (plakar may pass absolute paths).
 	pathname = strings.TrimPrefix(pathname, "/")
+	// Plakar prepends Root() (the owner) to all paths — strip it.
+	pathname = strings.TrimPrefix(pathname, e.owner+"/")
 	base := path.Base(pathname)
 	parts := strings.SplitN(pathname, "/", 3)
 	if len(parts) < 2 {
@@ -172,50 +174,44 @@ func (e *GitHubExporter) handleGitArchive(ctx context.Context, repoName string, 
 		return nil
 	}
 
-	// Create blobs and build tree entries.
-	// Try the first blob; if GitHub returns 409 (empty repo), bootstrap via Contents API first.
+	// Build tree entries using inline content (avoids separate blob creation).
+	// For binary files, base64-encode; for text files pass content directly.
 	var entries []*github.TreeEntry
-	bootstrapped := false
 	for _, f := range files {
-		encoded := string(f.content)
-		blob, resp, err := e.client.Git.CreateBlob(ctx, e.owner, repoName, &github.Blob{
-			Content:  github.Ptr(encoded),
-			Encoding: github.Ptr("utf-8"),
-		})
-		if err != nil && !bootstrapped && resp != nil && resp.StatusCode == 409 {
-			// Repo git store not yet initialized — seed with an empty commit via Contents API.
-			_, _, initErr := e.client.Repositories.CreateFile(ctx, e.owner, repoName, ".gitkeep", &github.RepositoryContentFileOptions{
-				Message: github.Ptr("init"),
-				Content: []byte{},
-			})
-			if initErr != nil {
-				return fmt.Errorf("github: initializing repo %s: %w", repoName, initErr)
-			}
-			bootstrapped = true
-			blob, _, err = e.client.Git.CreateBlob(ctx, e.owner, repoName, &github.Blob{
-				Content:  github.Ptr(encoded),
-				Encoding: github.Ptr("utf-8"),
-			})
+		entry := &github.TreeEntry{
+			Path:    github.Ptr(f.path),
+			Mode:    github.Ptr("100644"),
+			Type:    github.Ptr("blob"),
+			Content: github.Ptr(string(f.content)),
 		}
-		if err != nil {
-			// Fall back to base64 encoding for binary files.
-			blob, _, err = e.client.Git.CreateBlob(ctx, e.owner, repoName, &github.Blob{
-				Content:  github.Ptr(encoded),
-				Encoding: github.Ptr("base64"),
-			})
-			if err != nil {
-				return fmt.Errorf("github: creating blob for %s: %w", f.path, err)
-			}
-		}
-		entries = append(entries, &github.TreeEntry{
-			Path: github.Ptr(f.path),
-			Mode: github.Ptr("100644"),
-			Type: github.Ptr("blob"),
-			SHA:  blob.SHA,
-		})
+		entries = append(entries, entry)
 	}
 
-	tree, _, err := e.client.Git.CreateTree(ctx, e.owner, repoName, "", entries)
+	tree, resp, err := e.client.Git.CreateTree(ctx, e.owner, repoName, "", entries)
+	if err != nil && resp != nil && resp.StatusCode == 409 {
+		// Repo git store not yet initialized — seed it with an empty commit.
+		_, _, initErr := e.client.Repositories.CreateFile(ctx, e.owner, repoName, ".gitkeep", &github.RepositoryContentFileOptions{
+			Message: github.Ptr("init"),
+			Content: []byte{},
+		})
+		if initErr != nil {
+			return fmt.Errorf("github: initializing repo %s: %w", repoName, initErr)
+		}
+		tree, resp, err = e.client.Git.CreateTree(ctx, e.owner, repoName, "", entries)
+	}
+	if err != nil && resp != nil && resp.StatusCode == 403 {
+		// Fine-grained PATs without "workflows" permission cannot push .github/workflows files.
+		// Retry without them so the rest of the repo still restores.
+		var filtered []*github.TreeEntry
+		for _, entry := range entries {
+			if !strings.HasPrefix(entry.GetPath(), ".github/workflows/") {
+				filtered = append(filtered, entry)
+			}
+		}
+		if len(filtered) > 0 {
+			tree, _, err = e.client.Git.CreateTree(ctx, e.owner, repoName, "", filtered)
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("github: creating tree for %s: %w", repoName, err)
 	}

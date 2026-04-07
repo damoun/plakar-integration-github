@@ -200,7 +200,7 @@ func TestHandleIssue_Closed(t *testing.T) {
 
 func TestHandleGitArchive(t *testing.T) {
 	mux := http.NewServeMux()
-	blobCalled, treeCalled, commitCalled, refCalled := false, false, false, false
+	treeCalled, commitCalled, refCalled := false, false, false
 
 	// GET uses /git/ref/ (singular); POST/PATCH uses /git/refs/ (plural).
 	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/ref/heads/main", func(w http.ResponseWriter, _ *http.Request) {
@@ -213,13 +213,9 @@ func TestHandleGitArchive(t *testing.T) {
 		refCalled = true
 		writeJSON(w, map[string]any{"ref": "refs/heads/main"})
 	})
-	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/blobs", func(w http.ResponseWriter, _ *http.Request) {
-		blobCalled = true
-		writeJSON(w, map[string]any{"sha": "abc123"})
-	})
 	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/trees", func(w http.ResponseWriter, _ *http.Request) {
 		treeCalled = true
-		writeJSON(w, map[string]any{"sha": "tree123"})
+		writeJSON(w, map[string]any{"sha": "tree123456789012345678901234567890123456789"})
 	})
 	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/commits", func(w http.ResponseWriter, _ *http.Request) {
 		commitCalled = true
@@ -244,9 +240,6 @@ func TestHandleGitArchive(t *testing.T) {
 	exp := integration_github.NewGitHubExporter(client, "alice", "")
 	if err := exp.StoreFile(context.Background(), "repo-a/git.tar.gz", &buf, int64(buf.Len())); err != nil {
 		t.Fatalf("StoreFile git archive: %v", err)
-	}
-	if !blobCalled {
-		t.Error("expected blob creation call")
 	}
 	if !treeCalled {
 		t.Error("expected tree creation call")
@@ -339,36 +332,33 @@ func TestHandleIssue_DuplicateSkipped(t *testing.T) {
 	}
 }
 
-func TestHandleGitArchive_EmptyRepo(t *testing.T) {
+func TestHandleGitArchive_EmptyGitStore(t *testing.T) {
 	mux := http.NewServeMux()
-	blobAttempts := 0
+	treeAttempts := 0
 	initCalled := false
 
-	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/blobs", func(w http.ResponseWriter, _ *http.Request) {
-		blobAttempts++
-		if blobAttempts == 1 {
-			w.WriteHeader(http.StatusConflict) // 409 empty repo
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/ref/heads/main", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/refs", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]any{"ref": "refs/heads/main"})
+	})
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/trees", func(w http.ResponseWriter, _ *http.Request) {
+		treeAttempts++
+		if treeAttempts == 1 {
+			w.WriteHeader(http.StatusConflict)
 			writeJSON(w, map[string]any{"message": "Git Repository is empty."})
 			return
 		}
-		writeJSON(w, map[string]any{"sha": "abc123"})
+		writeJSON(w, map[string]any{"sha": "tree123456789012345678901234567890123456789"})
 	})
 	mux.HandleFunc("/api/v3/repos/alice/repo-a/contents/.gitkeep", func(w http.ResponseWriter, _ *http.Request) {
 		initCalled = true
 		w.WriteHeader(http.StatusCreated)
 		writeJSON(w, map[string]any{"content": map[string]any{"sha": "def456"}})
 	})
-	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/ref/heads/main", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	})
-	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/trees", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, map[string]any{"sha": "tree123"})
-	})
 	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/commits", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]any{"sha": "commit123"})
-	})
-	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/refs", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, map[string]any{"ref": "refs/heads/main"})
 	})
 	_, client := newTestClient(t, mux)
 
@@ -383,10 +373,57 @@ func TestHandleGitArchive_EmptyRepo(t *testing.T) {
 
 	exp := integration_github.NewGitHubExporter(client, "alice", "")
 	if err := exp.StoreFile(context.Background(), "repo-a/git.tar.gz", &buf, int64(buf.Len())); err != nil {
-		t.Fatalf("StoreFile empty repo: %v", err)
+		t.Fatalf("StoreFile empty git store: %v", err)
 	}
 	if !initCalled {
-		t.Error("expected .gitkeep init call for empty repo")
+		t.Error("expected .gitkeep init call for empty git store")
+	}
+}
+
+func TestHandleGitArchive_NewRepo(t *testing.T) {
+	mux := http.NewServeMux()
+	treeCalled, commitCalled, createRefCalled := false, false, false
+
+	// GET ref returns 404 (empty repo, no main branch yet).
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/ref/heads/main", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	// POST to /git/refs creates the ref.
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/refs", func(w http.ResponseWriter, _ *http.Request) {
+		createRefCalled = true
+		writeJSON(w, map[string]any{"ref": "refs/heads/main"})
+	})
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/trees", func(w http.ResponseWriter, _ *http.Request) {
+		treeCalled = true
+		writeJSON(w, map[string]any{"sha": "tree123456789012345678901234567890123456789"})
+	})
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/commits", func(w http.ResponseWriter, _ *http.Request) {
+		commitCalled = true
+		writeJSON(w, map[string]any{"sha": "commit123"})
+	})
+	_, client := newTestClient(t, mux)
+
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+	content := []byte("hello")
+	_ = tw.WriteHeader(&tar.Header{Name: "prefix/README.md", Size: int64(len(content)), Typeflag: tar.TypeReg})
+	_, _ = tw.Write(content)
+	_ = tw.Close()
+	_ = gw.Close()
+
+	exp := integration_github.NewGitHubExporter(client, "alice", "")
+	if err := exp.StoreFile(context.Background(), "repo-a/git.tar.gz", &buf, int64(buf.Len())); err != nil {
+		t.Fatalf("StoreFile new repo: %v", err)
+	}
+	if !treeCalled {
+		t.Error("expected tree creation call")
+	}
+	if !commitCalled {
+		t.Error("expected commit creation call")
+	}
+	if !createRefCalled {
+		t.Error("expected ref creation call for new repo")
 	}
 }
 
