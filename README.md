@@ -18,14 +18,20 @@ A [plakar](https://github.com/PlakarKorp/plakar) importer and exporter for GitHu
 
 ## Installation
 
-Build from source:
+Download the `.ptar` package for your platform from the [latest release](https://github.com/damoun/plakar-integration-github/releases/latest) and install it:
+
+```sh
+# Replace <version>, <os>, and <arch> with the appropriate values (e.g. v0.0.1, linux, amd64)
+curl -fsSL -O https://github.com/damoun/plakar-integration-github/releases/download/<version>/integration-github_<version>_<os>_<arch>.ptar
+plakar pkg add ./integration-github_<version>_<os>_<arch>.ptar
+```
+
+### Build from source
 
 ```sh
 git clone https://github.com/damoun/plakar-integration-github
 cd plakar-integration-github
-make build
-plakar pkg create manifest.yaml
-plakar pkg add ./integration-github_v0.0.1_darwin_arm64.ptar
+make install
 ```
 
 ## Token Permissions
