@@ -57,6 +57,9 @@ jobs:
           sed -i "s/^version:.*/version: ${TAG}/" manifest.yaml
 
       - name: Create .ptar package
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
         run: plakar pkg create manifest.yaml
 
       - name: Upload artifact
