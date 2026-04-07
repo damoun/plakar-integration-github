@@ -1,17 +1,18 @@
 module github.com/damoun/plakar-integration-github
 
-go 1.24.0
+go 1.25.0
 
 require (
 	github.com/PlakarKorp/go-kloset-sdk v1.0.5
 	github.com/PlakarKorp/kloset v1.0.12
 	github.com/google/go-github/v71 v71.0.0
+	github.com/google/go-github/v84 v84.0.0
 )
 
 require (
 	github.com/PlakarKorp/integration-grpc v1.0.18 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/google/go-querystring v1.1.0 // indirect
+	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/nickball/go-aes-key-wrap v0.0.0-20170929221519-1c3aa3e4dfc5 // indirect
