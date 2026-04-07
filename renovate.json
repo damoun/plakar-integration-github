@@ -1,6 +1,13 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "local>damoun/renovate-config"
+  "extends": ["local>damoun/renovate-config"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "fileMatch": ["^\\.github/workflows/release\\.yml$"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>[^\\s]+)\\s+PLAKAR_VERSION: \"(?<currentValue>[^\"]+)\""
+      ]
+    }
   ]
 }
