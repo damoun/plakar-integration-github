@@ -243,9 +243,9 @@ func TestScan_SingleRepo(t *testing.T) {
 	}
 
 	want := map[string]bool{
-		"repo-a/manifest.json": false,
-		"repo-a/git.tar.gz":    false,
-		"repo-a/issues/1.json": false,
+		"/repo-a/manifest.json": false,
+		"/repo-a/git.tar.gz":    false,
+		"/repo-a/issues/1.json": false,
 	}
 	for _, p := range paths {
 		want[p] = true
@@ -307,8 +307,8 @@ func TestScan_AllRepos(t *testing.T) {
 	}
 
 	want := map[string]bool{
-		"repo-a/manifest.json": false,
-		"repo-a/git.tar.gz":    false,
+		"/repo-a/manifest.json": false,
+		"/repo-a/git.tar.gz":    false,
 	}
 	for _, p := range paths {
 		want[p] = true

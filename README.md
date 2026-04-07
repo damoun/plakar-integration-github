@@ -1,6 +1,6 @@
 # plakar-integration-github
 
-A [plakar](https://github.com/PlakarKorp/plakar) importer for GitHub — backs up repositories (git history and files) and issues for both personal accounts and organizations.
+A [plakar](https://github.com/PlakarKorp/plakar) importer and exporter for GitHub — backs up and restores repositories (git content and files) and issues for both personal accounts and organizations.
 
 ## Features
 
@@ -8,7 +8,9 @@ A [plakar](https://github.com/PlakarKorp/plakar) importer for GitHub — backs u
 - Backs up issues as individual JSON records (pull requests excluded)
 - Supports personal accounts and organizations (auto-detected)
 - Backs up a single repo or all repos under an owner
-- Authenticates via GitHub PAT or bot token
+- Restores repositories to GitHub: creates the repo if missing, pushes git content, recreates issues
+- Skips duplicate issues on restore (use `force=true` to override)
+- Authenticates via GitHub PAT or fine-grained PAT
 
 ## Requirements
 
@@ -26,9 +28,26 @@ plakar pkg create manifest.yaml
 plakar pkg add ./integration-github_v0.0.1_darwin_arm64.ptar
 ```
 
+## Token Permissions
+
+### Classic PAT
+
+Scope: `repo` (full repository access).
+
+### Fine-grained PAT
+
+| Permission    | Backup | Restore |
+| ------------- | ------ | ------- |
+| **Contents**  | read   | write   |
+| **Issues**    | read   | write   |
+| **Metadata**  | read   | read    |
+| **Workflows** | —      | write   |
+
+The `Workflows` permission is required to restore `.github/workflows/` files. Without it, workflow files are skipped and all other content is still restored.
+
 ## Configuration
 
-Add a named source with your GitHub token:
+### Backup (importer)
 
 ```sh
 plakar source add mygithub "github://owner[/repo]" token=ghp_xxx
@@ -36,9 +55,22 @@ plakar source add mygithub "github://owner[/repo]" token=ghp_xxx
 
 | Key     | Required | Description                                               |
 | ------- | -------- | --------------------------------------------------------- |
-| `token` | yes      | GitHub Personal Access Token or bot token                 |
+| `token` | yes      | GitHub PAT                                                |
 | `owner` | no       | GitHub username or org (extracted from location if unset) |
 | `repo`  | no       | Specific repo name (defaults to all repos for the owner)  |
+
+### Restore (exporter)
+
+```sh
+plakar destination add mydest "github://owner[/repo]" token=ghp_xxx
+```
+
+| Key     | Required | Description                                                |
+| ------- | -------- | ---------------------------------------------------------- |
+| `token` | yes      | GitHub PAT with write access                               |
+| `owner` | no       | Destination owner (extracted from location if unset)       |
+| `repo`  | no       | Override destination repo name (single-repo restores only) |
+| `force` | no       | Set `true` to recreate issues even if they already exist   |
 
 ## Usage
 
@@ -54,6 +86,20 @@ Backup a single repository:
 ```sh
 plakar source add myrepo "github://damoun/plakar-integration-github" token=ghp_xxx
 plakar at /path/to/repo backup @myrepo
+```
+
+Restore a snapshot to GitHub:
+
+```sh
+plakar destination add mydest "github://damoun/new-repo" token=ghp_xxx
+plakar at /path/to/repo restore -latest -to @mydest
+```
+
+Restore and rename the repo:
+
+```sh
+plakar destination add mydest "github://damoun" token=ghp_xxx repo=new-name
+plakar at /path/to/repo restore -latest -to @mydest
 ```
 
 ## Backup Layout

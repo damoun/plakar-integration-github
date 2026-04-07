@@ -11,3 +11,7 @@ connectors:
     protocols:
       - github
     executable: integration-github-importer
+  - type: exporter
+    protocols:
+      - github
+    executable: integration-github-exporter

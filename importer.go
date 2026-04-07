@@ -28,22 +28,10 @@ func NewGitHubImporter(client *github.Client, owner, repo string) *GitHubImporte
 
 // NewImporter is the constructor called by the plakar SDK.
 func NewImporter(ctx context.Context, _ *importer.Options, _ string, config map[string]string) (importer.Importer, error) {
-	token := config["token"]
-	if token == "" {
-		return nil, fmt.Errorf("github: missing required config key: token")
+	token, owner, repo, err := parseConfig(config)
+	if err != nil {
+		return nil, err
 	}
-
-	owner, repo := ParseLocation(config["location"])
-	if v := config["owner"]; v != "" {
-		owner = v
-	}
-	if v := config["repo"]; v != "" {
-		repo = v
-	}
-	if owner == "" {
-		return nil, fmt.Errorf("github: missing owner: use github://owner[/repo] location")
-	}
-
 	return &GitHubImporter{
 		client: NewGitHubClient(ctx, token),
 		owner:  owner,
@@ -102,7 +90,7 @@ func (g *GitHubImporter) resolveRepos(ctx context.Context) ([]*github.Repository
 func (g *GitHubImporter) scanRepo(ctx context.Context, repo *github.Repository, ch chan<- *importer.ScanResult) error {
 	repoName := repo.GetName()
 
-	if err := g.emitJSON(repoName+"/manifest.json", "manifest.json", repo, time.Now(), ch); err != nil {
+	if err := g.emitJSON("/"+repoName+"/manifest.json", "manifest.json", repo, time.Now(), ch); err != nil {
 		return err
 	}
 	if err := g.emitGitArchive(ctx, repoName, ch); err != nil {
@@ -141,7 +129,7 @@ func (g *GitHubImporter) emitGitArchive(ctx context.Context, repoName string, ch
 		Lmode:    0o444,
 		LmodTime: time.Now(),
 	}
-	ch <- importer.NewScanRecord(repoName+"/git.tar.gz", "", fi, nil, func() (io.ReadCloser, error) {
+	ch <- importer.NewScanRecord("/"+repoName+"/git.tar.gz", "", fi, nil, func() (io.ReadCloser, error) {
 		rc, err := client.Client().Get(urlStr)
 		if err != nil {
 			return nil, err
@@ -166,7 +154,7 @@ func (g *GitHubImporter) emitIssues(ctx context.Context, repoName string, ch cha
 		if issue.IsPullRequest() {
 			continue
 		}
-		pathname := fmt.Sprintf("%s/issues/%d.json", repoName, issue.GetNumber())
+		pathname := fmt.Sprintf("/%s/issues/%d.json", repoName, issue.GetNumber())
 		name := fmt.Sprintf("%d.json", issue.GetNumber())
 		if err := g.emitJSON(pathname, name, issue, issue.GetUpdatedAt().Time, ch); err != nil {
 			return err

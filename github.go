@@ -2,6 +2,7 @@ package integration_github
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/google/go-github/v71/github"
 )
@@ -9,6 +10,25 @@ import (
 // NewGitHubClient returns an authenticated GitHub client.
 func NewGitHubClient(_ context.Context, token string) *github.Client {
 	return github.NewClient(nil).WithAuthToken(token)
+}
+
+// parseConfig extracts and validates the common token/owner/repo config keys.
+func parseConfig(config map[string]string) (token, owner, repo string, err error) {
+	token = config["token"]
+	if token == "" {
+		return "", "", "", fmt.Errorf("github: missing required config key: token")
+	}
+	owner, repo = ParseLocation(config["location"])
+	if v := config["owner"]; v != "" {
+		owner = v
+	}
+	if v := config["repo"]; v != "" {
+		repo = v
+	}
+	if owner == "" {
+		return "", "", "", fmt.Errorf("github: missing owner: use github://owner[/repo] location")
+	}
+	return token, owner, repo, nil
 }
 
 // IsOrg returns true if the owner is a GitHub organization.

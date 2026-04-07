@@ -12,6 +12,7 @@ all: build
 
 build:
 	$(GO) build -v -o $(NAME)-importer$(EXT) ./importer
+	$(GO) build -v -o $(NAME)-exporter$(EXT) ./exporter
 
 test:
 	$(GO) test -race -v ./...
@@ -25,4 +26,4 @@ install: pkg
 	plakar pkg add ./$(PTAR)
 
 clean:
-	rm -f $(NAME)-importer$(EXT) *.ptar coverage.out
+	rm -f $(NAME)-importer$(EXT) $(NAME)-exporter$(EXT) *.ptar coverage.out
