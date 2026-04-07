@@ -30,22 +30,10 @@ type GitHubExporter struct {
 
 // NewExporter is the constructor called by the plakar SDK.
 func NewExporter(ctx context.Context, _ *kloset_exporter.Options, _ string, config map[string]string) (kloset_exporter.Exporter, error) {
-	token := config["token"]
-	if token == "" {
-		return nil, fmt.Errorf("github: missing required config key: token")
+	token, owner, repo, err := parseConfig(config)
+	if err != nil {
+		return nil, err
 	}
-
-	owner, repo := ParseLocation(config["location"])
-	if v := config["owner"]; v != "" {
-		owner = v
-	}
-	if v := config["repo"]; v != "" {
-		repo = v
-	}
-	if owner == "" {
-		return nil, fmt.Errorf("github: missing owner: use github://owner[/repo] location")
-	}
-
 	return &GitHubExporter{
 		client:         NewGitHubClient(ctx, token),
 		owner:          owner,
@@ -96,7 +84,7 @@ func (e *GitHubExporter) StoreFile(ctx context.Context, pathname string, fp io.R
 		return e.handleManifest(ctx, repoName, fp)
 	case base == "git.tar.gz":
 		return e.handleGitArchive(ctx, repoName, fp)
-	case strings.HasPrefix(parts[len(parts)-1], "issues/") || (len(parts) == 3 && parts[1] == "issues"):
+	case len(parts) == 3 && parts[1] == "issues":
 		return e.handleIssue(ctx, repoName, fp)
 	}
 	return nil
@@ -174,8 +162,6 @@ func (e *GitHubExporter) handleGitArchive(ctx context.Context, repoName string, 
 		return nil
 	}
 
-	// Build tree entries using inline content (avoids separate blob creation).
-	// For binary files, base64-encode; for text files pass content directly.
 	var entries []*github.TreeEntry
 	for _, f := range files {
 		entry := &github.TreeEntry{
@@ -252,20 +238,16 @@ func (e *GitHubExporter) handleGitArchive(ctx context.Context, repoName string, 
 	return nil
 }
 
-func (e *GitHubExporter) loadExistingIssues(ctx context.Context, repoName string) error {
-	issues, _, err := e.client.Issues.ListByRepo(ctx, e.owner, repoName, &github.IssueListByRepoOptions{
-		State:       "all",
-		ListOptions: github.ListOptions{PerPage: 100},
-	})
+func (e *GitHubExporter) loadExistingIssues(ctx context.Context, repoName string) (map[string]bool, error) {
+	issues, err := ListIssues(ctx, e.client, e.owner, repoName)
 	if err != nil {
-		return fmt.Errorf("github: listing issues for %s: %w", repoName, err)
+		return nil, fmt.Errorf("github: listing issues for %s: %w", repoName, err)
 	}
 	titles := make(map[string]bool, len(issues))
 	for _, i := range issues {
 		titles[i.GetTitle()] = true
 	}
-	e.existingIssues[repoName] = titles
-	return nil
+	return titles, nil
 }
 
 func (e *GitHubExporter) handleIssue(ctx context.Context, repoName string, r io.Reader) error {
@@ -276,17 +258,27 @@ func (e *GitHubExporter) handleIssue(ctx context.Context, repoName string, r io.
 
 	if !e.force {
 		e.existingIssuesMu.Lock()
-		if _, loaded := e.existingIssues[repoName]; !loaded {
-			if err := e.loadExistingIssues(ctx, repoName); err != nil {
-				e.existingIssuesMu.Unlock()
+		_, loaded := e.existingIssues[repoName]
+		e.existingIssuesMu.Unlock()
+
+		if !loaded {
+			titles, err := e.loadExistingIssues(ctx, repoName)
+			if err != nil {
 				return err
 			}
-		}
-		if e.existingIssues[repoName][issue.GetTitle()] {
+			e.existingIssuesMu.Lock()
+			if _, still := e.existingIssues[repoName]; !still {
+				e.existingIssues[repoName] = titles
+			}
 			e.existingIssuesMu.Unlock()
+		}
+
+		e.existingIssuesMu.Lock()
+		skip := e.existingIssues[repoName][issue.GetTitle()]
+		e.existingIssuesMu.Unlock()
+		if skip {
 			return nil
 		}
-		e.existingIssuesMu.Unlock()
 	}
 
 	body := issue.GetBody()
