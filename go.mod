@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/PlakarKorp/go-kloset-sdk v1.0.5
-	github.com/PlakarKorp/kloset v1.0.12
+	github.com/PlakarKorp/kloset v1.0.13
 	github.com/google/go-github/v71 v71.0.0
 	github.com/google/go-github/v84 v84.0.0
 )
@@ -12,9 +12,11 @@ require (
 require (
 	github.com/PlakarKorp/integration-grpc v1.0.18 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
+	github.com/mattn/go-sqlite3 v1.14.32 // indirect
 	github.com/nickball/go-aes-key-wrap v0.0.0-20170929221519-1c3aa3e4dfc5 // indirect
 	github.com/pierrec/lz4/v4 v4.1.25 // indirect
 	github.com/tink-crypto/tink-go/v2 v2.6.0 // indirect
