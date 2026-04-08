@@ -8,12 +8,24 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/PlakarKorp/kloset/snapshot/exporter"
 	integration_github "github.com/damoun/plakar-integration-github"
 	"github.com/google/go-github/v71/github"
 )
+
+// repoExistsHandler returns a handler for GET /api/v3/repos/{owner}/{repo} that returns 200.
+func repoExistsHandler(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, map[string]any{"id": 1, "name": "repo-a"})
+}
+
+// repoNotFoundHandler returns a handler for GET /api/v3/repos/{owner}/{repo} that returns 404.
+func repoNotFoundHandler(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusNotFound)
+	writeJSON(w, map[string]any{"message": "Not Found"})
+}
 
 func TestNewExporter_MissingToken(t *testing.T) {
 	_, err := integration_github.NewExporter(context.Background(), &exporter.Options{}, "github", map[string]string{
@@ -93,7 +105,7 @@ func TestHandleManifest_ExistingRepo(t *testing.T) {
 	mux.HandleFunc("/api/v3/repos/alice/repo-a", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]any{"id": 1, "name": "repo-a"})
 	})
-	mux.HandleFunc("/api/v3/user/repos", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/api/v3/orgs/alice/repos", func(w http.ResponseWriter, _ *http.Request) {
 		called = true
 		writeJSON(w, map[string]any{"id": 1, "name": "repo-a"})
 	})
@@ -112,11 +124,8 @@ func TestHandleManifest_ExistingRepo(t *testing.T) {
 func TestHandleManifest_NewRepo(t *testing.T) {
 	mux := http.NewServeMux()
 	created := false
-	mux.HandleFunc("/api/v3/repos/alice/repo-new", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		writeJSON(w, map[string]any{"message": "Not Found"})
-	})
-	mux.HandleFunc("/api/v3/user/repos", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v3/repos/alice/repo-new", repoNotFoundHandler)
+	mux.HandleFunc("/api/v3/orgs/alice/repos", func(w http.ResponseWriter, r *http.Request) {
 		created = true
 		w.WriteHeader(http.StatusCreated)
 		writeJSON(w, map[string]any{"id": 2, "name": "repo-new"})
@@ -133,9 +142,45 @@ func TestHandleManifest_NewRepo(t *testing.T) {
 	}
 }
 
+// TestHandleManifest_ConcurrentIdempotent verifies that concurrent StoreFile calls for
+// the same repo only create it once (the race condition fixed by ensureRepo).
+func TestHandleManifest_ConcurrentIdempotent(t *testing.T) {
+	mux := http.NewServeMux()
+	var createCount int
+	var mu sync.Mutex
+	mux.HandleFunc("/api/v3/repos/alice/repo-new", repoNotFoundHandler)
+	mux.HandleFunc("/api/v3/orgs/alice/repos", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		createCount++
+		mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+		writeJSON(w, map[string]any{"id": 2, "name": "repo-new"})
+	})
+	_, client := newTestClient(t, mux)
+
+	exp := integration_github.NewGitHubExporter(client, "alice", "repo-new")
+	body, _ := json.Marshal(map[string]any{"name": "repo-a", "private": false})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = exp.StoreFile(context.Background(), "repo-a/manifest.json", bytes.NewReader(body), int64(len(body)))
+		}()
+	}
+	wg.Wait()
+
+	if createCount != 1 {
+		t.Errorf("expected exactly 1 repo creation, got %d", createCount)
+	}
+}
+
 func TestHandleIssue_Open(t *testing.T) {
 	mux := http.NewServeMux()
 	var createdTitle string
+	// ensureRepo checks if repo exists first.
+	mux.HandleFunc("/api/v3/repos/alice/repo-a", repoExistsHandler)
 	mux.HandleFunc("/api/v3/repos/alice/repo-a/issues", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			writeJSON(w, []any{})
@@ -168,6 +213,7 @@ func TestHandleIssue_Open(t *testing.T) {
 func TestHandleIssue_Closed(t *testing.T) {
 	mux := http.NewServeMux()
 	editCalled := false
+	mux.HandleFunc("/api/v3/repos/alice/repo-a", repoExistsHandler)
 	mux.HandleFunc("/api/v3/repos/alice/repo-a/issues", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			writeJSON(w, []any{})
@@ -202,6 +248,7 @@ func TestHandleGitArchive(t *testing.T) {
 	mux := http.NewServeMux()
 	treeCalled, commitCalled, refCalled := false, false, false
 
+	mux.HandleFunc("/api/v3/repos/alice/repo-a", repoExistsHandler)
 	// GET uses /git/ref/ (singular); POST/PATCH uses /git/refs/ (plural).
 	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/ref/heads/main", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]any{
@@ -268,6 +315,7 @@ func TestHandleGitArchive_Empty(t *testing.T) {
 func TestHandleIssue_WithLabels(t *testing.T) {
 	mux := http.NewServeMux()
 	var gotLabels []string
+	mux.HandleFunc("/api/v3/repos/alice/repo-a", repoExistsHandler)
 	mux.HandleFunc("/api/v3/repos/alice/repo-a/issues", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			writeJSON(w, []any{})
@@ -305,6 +353,7 @@ func TestHandleIssue_WithLabels(t *testing.T) {
 func TestHandleIssue_DuplicateSkipped(t *testing.T) {
 	mux := http.NewServeMux()
 	createCalled := false
+	mux.HandleFunc("/api/v3/repos/alice/repo-a", repoExistsHandler)
 	mux.HandleFunc("/api/v3/repos/alice/repo-a/issues", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			writeJSON(w, []any{map[string]any{"id": 1, "number": 1, "title": "Existing issue", "state": "open"}})
@@ -332,11 +381,50 @@ func TestHandleIssue_DuplicateSkipped(t *testing.T) {
 	}
 }
 
+// TestHandleIssue_RepoNotYetCreated verifies that issues can be created even when the repo
+// doesn't exist yet (concurrent restore order: issues before manifest.json).
+func TestHandleIssue_RepoNotYetCreated(t *testing.T) {
+	mux := http.NewServeMux()
+	var repoCreated bool
+	mux.HandleFunc("/api/v3/repos/alice/repo-a", func(w http.ResponseWriter, r *http.Request) {
+		if repoCreated {
+			writeJSON(w, map[string]any{"id": 1, "name": "repo-a"})
+		} else {
+			repoNotFoundHandler(w, r)
+		}
+	})
+	mux.HandleFunc("/api/v3/orgs/alice/repos", func(w http.ResponseWriter, _ *http.Request) {
+		repoCreated = true
+		w.WriteHeader(http.StatusCreated)
+		writeJSON(w, map[string]any{"id": 1, "name": "repo-a"})
+	})
+	mux.HandleFunc("/api/v3/repos/alice/repo-a/issues", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			writeJSON(w, []any{})
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		writeJSON(w, map[string]any{"id": 1, "number": 1, "state": "open"})
+	})
+	_, client := newTestClient(t, mux)
+
+	exp := integration_github.NewGitHubExporter(client, "alice", "")
+	issue := github.Issue{Number: github.Ptr(1), Title: github.Ptr("Bug"), Body: github.Ptr("body"), State: github.Ptr("open")}
+	body, _ := json.Marshal(issue)
+	if err := exp.StoreFile(context.Background(), "repo-a/issues/1.json", bytes.NewReader(body), int64(len(body))); err != nil {
+		t.Fatalf("issue before manifest should succeed: %v", err)
+	}
+	if !repoCreated {
+		t.Error("expected repo to be auto-created for missing repo")
+	}
+}
+
 func TestHandleGitArchive_EmptyGitStore(t *testing.T) {
 	mux := http.NewServeMux()
 	treeAttempts := 0
 	initCalled := false
 
+	mux.HandleFunc("/api/v3/repos/alice/repo-a", repoExistsHandler)
 	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/ref/heads/main", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	})
@@ -384,6 +472,7 @@ func TestHandleGitArchive_NewRepo(t *testing.T) {
 	mux := http.NewServeMux()
 	treeCalled, commitCalled, createRefCalled := false, false, false
 
+	mux.HandleFunc("/api/v3/repos/alice/repo-a", repoExistsHandler)
 	// GET ref returns 404 (empty repo, no main branch yet).
 	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/ref/heads/main", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -440,11 +529,8 @@ func TestNewExporter_ForceFlag(t *testing.T) {
 
 func TestHandleManifest_403(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v3/repos/alice/repo-a", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		writeJSON(w, map[string]any{"message": "Not Found"})
-	})
-	mux.HandleFunc("/api/v3/user/repos", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/api/v3/repos/alice/repo-a", repoNotFoundHandler)
+	mux.HandleFunc("/api/v3/orgs/alice/repos", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		writeJSON(w, map[string]any{"message": "Resource not accessible by personal access token"})
 	})
@@ -482,6 +568,7 @@ func TestHandleManifest_401(t *testing.T) {
 
 func TestHandleIssue_403(t *testing.T) {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v3/repos/alice/repo-a", repoExistsHandler)
 	mux.HandleFunc("/api/v3/repos/alice/repo-a/issues", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			writeJSON(w, []any{})
@@ -513,6 +600,7 @@ func TestHandleGitArchive_403WorkflowFiltered(t *testing.T) {
 	mux := http.NewServeMux()
 	treeAttempts := 0
 
+	mux.HandleFunc("/api/v3/repos/alice/repo-a", repoExistsHandler)
 	mux.HandleFunc("/api/v3/repos/alice/repo-a/git/ref/heads/main", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	})

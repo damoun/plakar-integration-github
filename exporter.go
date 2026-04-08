@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -24,6 +25,10 @@ type GitHubExporter struct {
 	repoOverride string
 	force        bool
 
+	// repoCreated guards one-time lazy repo creation per repo name.
+	repoCreated   map[string]bool
+	repoCreatedMu sync.Mutex
+
 	// existingIssues caches issue titles per repo to skip duplicates when force=false.
 	existingIssues   map[string]map[string]bool
 	existingIssuesMu sync.Mutex
@@ -40,6 +45,7 @@ func NewExporter(ctx context.Context, _ *kloset_exporter.Options, _ string, conf
 		owner:          owner,
 		repoOverride:   repo,
 		force:          config["force"] == "true",
+		repoCreated:    make(map[string]bool),
 		existingIssues: make(map[string]map[string]bool),
 	}, nil
 }
@@ -50,6 +56,7 @@ func NewGitHubExporter(client *github.Client, owner, repoOverride string) *GitHu
 		client:         client,
 		owner:          owner,
 		repoOverride:   repoOverride,
+		repoCreated:    make(map[string]bool),
 		existingIssues: make(map[string]map[string]bool),
 	}
 }
@@ -91,15 +98,22 @@ func (e *GitHubExporter) StoreFile(ctx context.Context, pathname string, fp io.R
 	return nil
 }
 
-func (e *GitHubExporter) handleManifest(ctx context.Context, repoName string, r io.Reader) error {
-	var repo github.Repository
-	if err := json.NewDecoder(r).Decode(&repo); err != nil {
-		return fmt.Errorf("github: decoding manifest for %s: %w", repoName, err)
+// ensureRepo creates the repository if it hasn't been created yet.
+// It is safe to call concurrently; only the first call creates the repo.
+func (e *GitHubExporter) ensureRepo(ctx context.Context, repoName string, req *github.Repository) error {
+	e.repoCreatedMu.Lock()
+	if e.repoCreated[repoName] {
+		e.repoCreatedMu.Unlock()
+		return nil
 	}
+	e.repoCreatedMu.Unlock()
 
 	_, resp, err := e.client.Repositories.Get(ctx, e.owner, repoName)
 	if err == nil {
-		return nil // repo already exists
+		e.repoCreatedMu.Lock()
+		e.repoCreated[repoName] = true
+		e.repoCreatedMu.Unlock()
+		return nil
 	}
 	if resp == nil || resp.StatusCode != 404 {
 		if resp != nil && resp.StatusCode == 401 {
@@ -111,13 +125,25 @@ func (e *GitHubExporter) handleManifest(ctx context.Context, repoName string, r 
 		return fmt.Errorf("github: checking repo %s/%s: %w", e.owner, repoName, err)
 	}
 
-	req := &github.Repository{
-		Name:        github.Ptr(repoName),
-		Description: repo.Description,
-		Private:     repo.Private,
+	// Double-check under lock to avoid concurrent creation.
+	e.repoCreatedMu.Lock()
+	defer e.repoCreatedMu.Unlock()
+	if e.repoCreated[repoName] {
+		return nil
 	}
-	_, createResp, err := e.client.Repositories.Create(ctx, "", req)
+
+	createReq := &github.Repository{Name: github.Ptr(repoName)}
+	if req != nil {
+		createReq.Description = req.Description
+		createReq.Private = req.Private
+	}
+	_, createResp, err := e.client.Repositories.Create(ctx, e.owner, createReq)
 	if err != nil {
+		if createResp != nil && createResp.StatusCode == 422 {
+			// Already created by a concurrent goroutine — that's fine.
+			e.repoCreated[repoName] = true
+			return nil
+		}
 		if createResp != nil && createResp.StatusCode == 401 {
 			return fmt.Errorf("github: authentication failed creating repo %s — check token validity: %w", repoName, err)
 		}
@@ -126,7 +152,16 @@ func (e *GitHubExporter) handleManifest(ctx context.Context, repoName string, r 
 		}
 		return fmt.Errorf("github: creating repo %s: %w", repoName, err)
 	}
+	e.repoCreated[repoName] = true
 	return nil
+}
+
+func (e *GitHubExporter) handleManifest(ctx context.Context, repoName string, r io.Reader) error {
+	var repo github.Repository
+	if err := json.NewDecoder(r).Decode(&repo); err != nil {
+		return fmt.Errorf("github: decoding manifest for %s: %w", repoName, err)
+	}
+	return e.ensureRepo(ctx, repoName, &repo)
 }
 
 func (e *GitHubExporter) handleGitArchive(ctx context.Context, repoName string, r io.Reader) error {
@@ -184,6 +219,10 @@ func (e *GitHubExporter) handleGitArchive(ctx context.Context, repoName string, 
 			Content: github.Ptr(string(f.content)),
 		}
 		entries = append(entries, entry)
+	}
+
+	if err := e.ensureRepo(ctx, repoName, nil); err != nil {
+		return err
 	}
 
 	tree, resp, err := e.client.Git.CreateTree(ctx, e.owner, repoName, "", entries)
@@ -260,6 +299,11 @@ func (e *GitHubExporter) handleGitArchive(ctx context.Context, repoName string, 
 func (e *GitHubExporter) loadExistingIssues(ctx context.Context, repoName string) (map[string]bool, error) {
 	issues, err := ListIssues(ctx, e.client, e.owner, repoName)
 	if err != nil {
+		// 404 means the repo doesn't exist yet; treat as no existing issues.
+		var ghErr *github.ErrorResponse
+		if errors.As(err, &ghErr) && ghErr.Response != nil && ghErr.Response.StatusCode == 404 {
+			return make(map[string]bool), nil
+		}
 		return nil, fmt.Errorf("github: listing issues for %s: %w", repoName, err)
 	}
 	titles := make(map[string]bool, len(issues))
@@ -312,6 +356,10 @@ func (e *GitHubExporter) handleIssue(ctx context.Context, repoName string, r io.
 		Title:  github.Ptr(issue.GetTitle()),
 		Body:   github.Ptr(body),
 		Labels: &labelNames,
+	}
+
+	if err := e.ensureRepo(ctx, repoName, nil); err != nil {
+		return err
 	}
 
 	created, createResp, err := e.client.Issues.Create(ctx, e.owner, repoName, req)
