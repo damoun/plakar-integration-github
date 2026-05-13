@@ -3,7 +3,7 @@ EXT ?=
 OS   := $(shell go env GOOS)
 ARCH := $(shell go env GOARCH)
 NAME := integration-github
-VERSION := $(shell grep '^version:' manifest.yaml | awk '{print $$2}')
+VERSION ?= v0.0.1
 PTAR := $(NAME)_$(VERSION)_$(OS)_$(ARCH).ptar
 
 .PHONY: all build test pkg install clean
@@ -19,7 +19,7 @@ test:
 
 pkg: build
 	rm -f $(PTAR)
-	plakar pkg create manifest.yaml
+	plakar pkg create manifest.yaml $(VERSION)
 
 install: pkg
 	plakar pkg rm $(NAME) 2>/dev/null || true
