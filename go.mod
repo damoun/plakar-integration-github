@@ -6,6 +6,7 @@ require (
 	github.com/PlakarKorp/go-kloset-sdk v1.0.5
 	github.com/PlakarKorp/kloset v1.0.13
 	github.com/google/go-github/v71 v71.0.0
+	github.com/google/go-github/v80 v80.0.0
 	github.com/google/go-github/v84 v84.0.0
 )
 
