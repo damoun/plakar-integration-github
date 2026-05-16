@@ -7,6 +7,7 @@ require (
 	github.com/PlakarKorp/kloset v1.0.13
 	github.com/google/go-github/v71 v71.0.0
 	github.com/google/go-github/v84 v84.0.0
+	github.com/google/go-github/v85 v85.0.0
 )
 
 require (
