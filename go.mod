@@ -3,7 +3,7 @@ module github.com/damoun/plakar-integration-github
 go 1.25.0
 
 require (
-	github.com/PlakarKorp/go-kloset-sdk v1.0.5
+	github.com/PlakarKorp/go-kloset-sdk v1.1.0
 	github.com/PlakarKorp/kloset v1.0.13
 	github.com/google/go-github/v71 v71.0.0
 	github.com/google/go-github/v84 v84.0.0
