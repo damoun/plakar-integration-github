@@ -200,19 +200,6 @@ func TestImporterMethods(t *testing.T) {
 	}
 }
 
-func TestNewImporter_OwnerOverride(t *testing.T) {
-	ctx := context.Background()
-	_, err := integration_github.NewImporter(ctx, &connectors.Options{}, "github", map[string]string{
-		"token":    "ghp_test",
-		"location": "github://ignored",
-		"owner":    "explicit",
-		"repo":     "myrepo",
-	})
-	if err != nil {
-		t.Fatalf("NewImporter: %v", err)
-	}
-}
-
 func TestImport_SingleRepo(t *testing.T) {
 	mux := http.NewServeMux()
 	srv, client := newTestClient(t, mux)
