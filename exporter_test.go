@@ -62,6 +62,20 @@ func TestExporterRoot(t *testing.T) {
 	}
 }
 
+func TestNewExporter_OwnerOverride(t *testing.T) {
+	exp, err := integration_github.NewExporter(context.Background(), &connectors.Options{}, "github", map[string]string{
+		"token":    "ghp_test",
+		"location": "github://ignored",
+		"owner":    "explicit",
+	})
+	if err != nil {
+		t.Fatalf("NewExporter: %v", err)
+	}
+	if v := exp.Root(); v != "explicit" {
+		t.Errorf("Root() = %q, want %q", v, "explicit")
+	}
+}
+
 // TestExport_AcksAllRecords verifies that directories, symlinks and unknown
 // files are acknowledged without touching the GitHub API.
 func TestExport_AcksAllRecords(t *testing.T) {

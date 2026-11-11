@@ -42,7 +42,7 @@ func NewImporter(ctx context.Context, _ *connectors.Options, _ string, config ma
 
 func (g *GitHubImporter) Origin() string                { return "github.com" }
 func (g *GitHubImporter) Type() string                  { return "github" }
-func (g *GitHubImporter) Root() string                  { return g.owner }
+func (g *GitHubImporter) Root() string                  { return "/" }
 func (g *GitHubImporter) Ping(_ context.Context) error  { return nil }
 func (g *GitHubImporter) Close(_ context.Context) error { return nil }
 

@@ -192,7 +192,7 @@ func TestImporterMethods(t *testing.T) {
 	if v := imp.Type(); v != "github" {
 		t.Errorf("Type() = %q", v)
 	}
-	if v := imp.Root(); v != "alice" {
+	if v := imp.Root(); v != "/" {
 		t.Errorf("Root() = %q", v)
 	}
 	if err := imp.Close(ctx); err != nil {
@@ -202,7 +202,7 @@ func TestImporterMethods(t *testing.T) {
 
 func TestNewImporter_OwnerOverride(t *testing.T) {
 	ctx := context.Background()
-	imp, err := integration_github.NewImporter(ctx, &connectors.Options{}, "github", map[string]string{
+	_, err := integration_github.NewImporter(ctx, &connectors.Options{}, "github", map[string]string{
 		"token":    "ghp_test",
 		"location": "github://ignored",
 		"owner":    "explicit",
@@ -210,9 +210,6 @@ func TestNewImporter_OwnerOverride(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("NewImporter: %v", err)
-	}
-	if v := imp.Root(); v != "explicit" {
-		t.Errorf("Root() = %q, want %q", v, "explicit")
 	}
 }
 
