@@ -4,7 +4,9 @@
   "customManagers": [
     {
       "customType": "regex",
-      "fileMatch": ["^\\.github/workflows/release\\.yml$"],
+      "managerFilePatterns": [
+        "/^\\.github/workflows/release\\.yml$/"
+      ],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>[^\\s]+)\\s+PLAKAR_VERSION: \"(?<currentValue>[^\"]+)\""
       ]
