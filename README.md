@@ -14,7 +14,7 @@ A [plakar](https://github.com/PlakarKorp/plakar) importer and exporter for GitHu
 
 ## Requirements
 
-- plakar v1.0.6+
+- plakar v1.1+
 
 ## Installation
 
