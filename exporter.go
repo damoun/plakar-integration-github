@@ -13,8 +13,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/PlakarKorp/kloset/objects"
-	kloset_exporter "github.com/PlakarKorp/kloset/snapshot/exporter"
+	"github.com/PlakarKorp/kloset/connectors"
+	kloset_exporter "github.com/PlakarKorp/kloset/connectors/exporter"
+	"github.com/PlakarKorp/kloset/location"
 	"github.com/google/go-github/v71/github"
 )
 
@@ -35,7 +36,7 @@ type GitHubExporter struct {
 }
 
 // NewExporter is the constructor called by the plakar SDK.
-func NewExporter(ctx context.Context, _ *kloset_exporter.Options, _ string, config map[string]string) (kloset_exporter.Exporter, error) {
+func NewExporter(ctx context.Context, _ *connectors.Options, _ string, config map[string]string) (kloset_exporter.Exporter, error) {
 	token, owner, repo, err := parseConfig(config)
 	if err != nil {
 		return nil, err
@@ -61,15 +62,30 @@ func NewGitHubExporter(client *github.Client, owner, repoOverride string) *GitHu
 	}
 }
 
-func (e *GitHubExporter) Root(_ context.Context) (string, error)            { return e.owner, nil }
-func (e *GitHubExporter) CreateDirectory(_ context.Context, _ string) error { return nil }
-func (e *GitHubExporter) CreateLink(_ context.Context, _, _ string, _ kloset_exporter.LinkType) error {
-	return nil
-}
-func (e *GitHubExporter) SetPermissions(_ context.Context, _ string, _ *objects.FileInfo) error {
-	return nil
-}
+func (e *GitHubExporter) Origin() string                { return "github.com" }
+func (e *GitHubExporter) Type() string                  { return "github" }
+func (e *GitHubExporter) Root() string                  { return e.owner }
+func (e *GitHubExporter) Flags() location.Flags         { return 0 }
+func (e *GitHubExporter) Ping(_ context.Context) error  { return nil }
 func (e *GitHubExporter) Close(_ context.Context) error { return nil }
+
+// Export restores regular files through StoreFile and acknowledges every record.
+func (e *GitHubExporter) Export(ctx context.Context, records <-chan *connectors.Record, results chan<- *connectors.Result) error {
+	defer close(results)
+
+	for record := range records {
+		if record.Err != nil || record.IsXattr || !record.FileInfo.Mode().IsRegular() {
+			results <- record.Ok()
+			continue
+		}
+		if err := e.StoreFile(ctx, record.Pathname, record.Reader, record.FileInfo.Size()); err != nil {
+			results <- record.Error(err)
+			continue
+		}
+		results <- record.Ok()
+	}
+	return nil
+}
 
 // StoreFile dispatches based on the pathname suffix.
 func (e *GitHubExporter) StoreFile(ctx context.Context, pathname string, fp io.Reader, _ int64) error {

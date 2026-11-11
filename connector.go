@@ -1,9 +1,9 @@
 package integration_github
 
 import (
+	"github.com/PlakarKorp/kloset/connectors/exporter"
+	"github.com/PlakarKorp/kloset/connectors/importer"
 	"github.com/PlakarKorp/kloset/location"
-	"github.com/PlakarKorp/kloset/snapshot/exporter"
-	"github.com/PlakarKorp/kloset/snapshot/importer"
 )
 
 func init() {

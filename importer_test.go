@@ -13,7 +13,7 @@ import (
 	integration_github "github.com/damoun/plakar-integration-github"
 	"github.com/google/go-github/v71/github"
 
-	"github.com/PlakarKorp/kloset/snapshot/importer"
+	"github.com/PlakarKorp/kloset/connectors"
 )
 
 // newTestClient returns a GitHub client pointed at a test HTTP server.
@@ -34,9 +34,26 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// importAll runs Import to completion and returns every emitted record.
+func importAll(t *testing.T, imp *integration_github.GitHubImporter) []*connectors.Record {
+	t.Helper()
+	records := make(chan *connectors.Record)
+	errc := make(chan error, 1)
+	go func() { errc <- imp.Import(context.Background(), records, nil) }()
+
+	var out []*connectors.Record
+	for record := range records {
+		out = append(out, record)
+	}
+	if err := <-errc; err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	return out
+}
+
 func TestNewImporter_MissingToken(t *testing.T) {
 	ctx := context.Background()
-	_, err := integration_github.NewImporter(ctx, &importer.Options{}, "github", map[string]string{
+	_, err := integration_github.NewImporter(ctx, &connectors.Options{}, "github", map[string]string{
 		"location": "github://testowner",
 	})
 	if err == nil {
@@ -46,7 +63,7 @@ func TestNewImporter_MissingToken(t *testing.T) {
 
 func TestNewImporter_MissingOwner(t *testing.T) {
 	ctx := context.Background()
-	_, err := integration_github.NewImporter(ctx, &importer.Options{}, "github", map[string]string{
+	_, err := integration_github.NewImporter(ctx, &connectors.Options{}, "github", map[string]string{
 		"token":    "ghp_test",
 		"location": "github://",
 	})
@@ -161,7 +178,7 @@ func TestIsOrg(t *testing.T) {
 
 func TestImporterMethods(t *testing.T) {
 	ctx := context.Background()
-	imp, err := integration_github.NewImporter(ctx, &importer.Options{}, "github", map[string]string{
+	imp, err := integration_github.NewImporter(ctx, &connectors.Options{}, "github", map[string]string{
 		"token":    "ghp_test",
 		"location": "github://alice",
 	})
@@ -169,14 +186,14 @@ func TestImporterMethods(t *testing.T) {
 		t.Fatalf("NewImporter: %v", err)
 	}
 
-	if v, err := imp.Origin(ctx); err != nil || v != "github.com" {
-		t.Errorf("Origin() = %q, %v", v, err)
+	if v := imp.Origin(); v != "github.com" {
+		t.Errorf("Origin() = %q", v)
 	}
-	if v, err := imp.Type(ctx); err != nil || v != "github" {
-		t.Errorf("Type() = %q, %v", v, err)
+	if v := imp.Type(); v != "github" {
+		t.Errorf("Type() = %q", v)
 	}
-	if v, err := imp.Root(ctx); err != nil || v != "alice" {
-		t.Errorf("Root() = %q, %v", v, err)
+	if v := imp.Root(); v != "alice" {
+		t.Errorf("Root() = %q", v)
 	}
 	if err := imp.Close(ctx); err != nil {
 		t.Errorf("Close() = %v", err)
@@ -185,7 +202,7 @@ func TestImporterMethods(t *testing.T) {
 
 func TestNewImporter_OwnerOverride(t *testing.T) {
 	ctx := context.Background()
-	imp, err := integration_github.NewImporter(ctx, &importer.Options{}, "github", map[string]string{
+	imp, err := integration_github.NewImporter(ctx, &connectors.Options{}, "github", map[string]string{
 		"token":    "ghp_test",
 		"location": "github://ignored",
 		"owner":    "explicit",
@@ -194,12 +211,12 @@ func TestNewImporter_OwnerOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewImporter: %v", err)
 	}
-	if v, _ := imp.Root(ctx); v != "explicit" {
+	if v := imp.Root(); v != "explicit" {
 		t.Errorf("Root() = %q, want %q", v, "explicit")
 	}
 }
 
-func TestScan_SingleRepo(t *testing.T) {
+func TestImport_SingleRepo(t *testing.T) {
 	mux := http.NewServeMux()
 	srv, client := newTestClient(t, mux)
 
@@ -219,27 +236,21 @@ func TestScan_SingleRepo(t *testing.T) {
 		http.Redirect(w, r, srv.URL+"/archive/repo-a.tar.gz", http.StatusFound)
 	})
 
-	ctx := context.Background()
 	imp := integration_github.NewGitHubImporter(client, "alice", "repo-a")
 
-	ch, err := imp.Scan(ctx)
-	if err != nil {
-		t.Fatalf("Scan: %v", err)
-	}
-
 	var paths []string
-	for result := range ch {
-		if result.Error != nil {
-			t.Errorf("scan error: %v", result.Error.Err)
+	for _, record := range importAll(t, imp) {
+		if record.Err != nil {
+			t.Errorf("import error: %v", record.Err)
 			continue
 		}
-		if result.Record.Reader != nil {
+		if record.Reader != nil {
 			func() {
-				defer result.Record.Reader.Close() //nolint:errcheck
-				_, _ = io.ReadAll(result.Record.Reader)
+				defer record.Reader.Close() //nolint:errcheck
+				_, _ = io.ReadAll(record.Reader)
 			}()
 		}
-		paths = append(paths, result.Record.Pathname)
+		paths = append(paths, record.Pathname)
 	}
 
 	want := map[string]bool{
@@ -264,7 +275,7 @@ func TestFlags(t *testing.T) {
 	}
 }
 
-func TestScan_AllRepos(t *testing.T) {
+func TestImport_AllRepos(t *testing.T) {
 	mux := http.NewServeMux()
 
 	// IsOrg
@@ -292,18 +303,14 @@ func TestScan_AllRepos(t *testing.T) {
 	})
 
 	imp := integration_github.NewGitHubImporter(client, "alice", "")
-	ch, err := imp.Scan(context.Background())
-	if err != nil {
-		t.Fatalf("Scan: %v", err)
-	}
 
 	var paths []string
-	for result := range ch {
-		if result.Error != nil {
-			t.Errorf("scan error: %v", result.Error.Err)
+	for _, record := range importAll(t, imp) {
+		if record.Err != nil {
+			t.Errorf("import error: %v", record.Err)
 			continue
 		}
-		paths = append(paths, result.Record.Pathname)
+		paths = append(paths, record.Pathname)
 	}
 
 	want := map[string]bool{
