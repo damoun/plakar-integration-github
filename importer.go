@@ -60,7 +60,7 @@ func (g *GitHubImporter) Import(ctx context.Context, records chan<- *connectors.
 			return nil
 		}
 		if err := g.scanRepo(ctx, repo, records); err != nil {
-			records <- connectors.NewError(repo.GetName(), err)
+			records <- connectors.NewError("/"+repo.GetName(), err)
 		}
 	}
 	return nil
