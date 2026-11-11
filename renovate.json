@@ -13,7 +13,8 @@
   "packageRules": [
     {
       "matchPackageNames": ["PlakarKorp/plakar"],
-      "allowedVersions": "!/-/"
+      "allowedVersions": "!/-/",
+      "minimumReleaseAge": "7 days"
     }
   ]
 }
