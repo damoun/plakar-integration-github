@@ -9,5 +9,12 @@
         "# renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>[^\\s]+)\\s+PLAKAR_VERSION: \"(?<currentValue>[^\"]+)\""
       ]
     }
+  ],
+  "packageRules": [
+    {
+      "matchPackageNames": ["PlakarKorp/plakar"],
+      "allowedVersions": "!/-/",
+      "minimumReleaseAge": "7 days"
+    }
   ]
 }
