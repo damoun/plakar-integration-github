@@ -148,6 +148,27 @@ func TestHandleManifest_ExistingRepo(t *testing.T) {
 	}
 }
 
+// TestStoreFile_RepoNamedAfterOwner verifies that a profile repo (alice/alice)
+// is not mistaken for an owner prefix.
+func TestStoreFile_RepoNamedAfterOwner(t *testing.T) {
+	mux := http.NewServeMux()
+	checked := false
+	mux.HandleFunc("/api/v3/repos/alice/alice", func(w http.ResponseWriter, _ *http.Request) {
+		checked = true
+		writeJSON(w, map[string]any{"id": 1, "name": "alice"})
+	})
+	_, client := newTestClient(t, mux)
+
+	exp := integration_github.NewGitHubExporter(client, "alice", "")
+	body, _ := json.Marshal(map[string]any{"name": "alice"})
+	if err := exp.StoreFile(context.Background(), "/alice/manifest.json", bytes.NewReader(body), int64(len(body))); err != nil {
+		t.Fatalf("StoreFile manifest: %v", err)
+	}
+	if !checked {
+		t.Error("expected manifest for alice/alice to be restored")
+	}
+}
+
 func TestHandleManifest_NewRepo(t *testing.T) {
 	mux := http.NewServeMux()
 	created := false

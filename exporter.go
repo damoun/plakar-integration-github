@@ -91,8 +91,6 @@ func (e *GitHubExporter) Export(ctx context.Context, records <-chan *connectors.
 func (e *GitHubExporter) StoreFile(ctx context.Context, pathname string, fp io.Reader, _ int64) error {
 	// Strip leading slash if present (plakar may pass absolute paths).
 	pathname = strings.TrimPrefix(pathname, "/")
-	// Plakar prepends Root() (the owner) to all paths — strip it.
-	pathname = strings.TrimPrefix(pathname, e.owner+"/")
 	base := path.Base(pathname)
 	parts := strings.SplitN(pathname, "/", 3)
 	if len(parts) < 2 {
