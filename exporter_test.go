@@ -7,11 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 
-	"github.com/PlakarKorp/kloset/snapshot/exporter"
+	"github.com/PlakarKorp/kloset/connectors"
+	"github.com/PlakarKorp/kloset/objects"
 	integration_github "github.com/damoun/plakar-integration-github"
 	"github.com/google/go-github/v71/github"
 )
@@ -28,7 +30,7 @@ func repoNotFoundHandler(w http.ResponseWriter, _ *http.Request) {
 }
 
 func TestNewExporter_MissingToken(t *testing.T) {
-	_, err := integration_github.NewExporter(context.Background(), &exporter.Options{}, "github", map[string]string{
+	_, err := integration_github.NewExporter(context.Background(), &connectors.Options{}, "github", map[string]string{
 		"location": "github://alice",
 	})
 	if err == nil {
@@ -37,7 +39,7 @@ func TestNewExporter_MissingToken(t *testing.T) {
 }
 
 func TestNewExporter_MissingOwner(t *testing.T) {
-	_, err := integration_github.NewExporter(context.Background(), &exporter.Options{}, "github", map[string]string{
+	_, err := integration_github.NewExporter(context.Background(), &connectors.Options{}, "github", map[string]string{
 		"token":    "ghp_test",
 		"location": "github://",
 	})
@@ -47,39 +49,62 @@ func TestNewExporter_MissingOwner(t *testing.T) {
 }
 
 func TestExporterRoot(t *testing.T) {
-	exp, err := integration_github.NewExporter(context.Background(), &exporter.Options{}, "github", map[string]string{
+	exp, err := integration_github.NewExporter(context.Background(), &connectors.Options{}, "github", map[string]string{
 		"token":    "ghp_test",
 		"location": "github://alice",
 	})
 	if err != nil {
 		t.Fatalf("NewExporter: %v", err)
 	}
-	root, err := exp.Root(context.Background())
-	if err != nil {
-		t.Fatalf("Root: %v", err)
-	}
-	if root != "alice" {
+	if root := exp.Root(); root != "alice" {
 		t.Errorf("Root() = %q, want %q", root, "alice")
 	}
 }
 
-func TestExporterNoOps(t *testing.T) {
-	exp, err := integration_github.NewExporter(context.Background(), &exporter.Options{}, "github", map[string]string{
+func TestNewExporter_OwnerOverride(t *testing.T) {
+	exp, err := integration_github.NewExporter(context.Background(), &connectors.Options{}, "github", map[string]string{
 		"token":    "ghp_test",
-		"location": "github://alice",
+		"location": "github://ignored",
+		"owner":    "explicit",
 	})
 	if err != nil {
 		t.Fatalf("NewExporter: %v", err)
 	}
+	if v := exp.Root(); v != "explicit" {
+		t.Errorf("Root() = %q, want %q", v, "explicit")
+	}
+}
+
+// TestExport_AcksAllRecords verifies that directories, symlinks and unknown
+// files are acknowledged without touching the GitHub API.
+func TestExport_AcksAllRecords(t *testing.T) {
+	exp := integration_github.NewGitHubExporter(nil, "alice", "")
+	sent := []*connectors.Record{
+		connectors.NewRecord("/repo-a", "", objects.FileInfo{Lname: "repo-a", Lmode: os.ModeDir | 0o755}, nil, nil),
+		connectors.NewRecord("/repo-a/link", "target", objects.FileInfo{Lname: "link", Lmode: os.ModeSymlink | 0o777}, nil, nil),
+		connectors.NewRecord("/repo-a/unknown.txt", "", objects.FileInfo{Lname: "unknown.txt", Lmode: 0o644}, nil, nil),
+	}
+
+	records := make(chan *connectors.Record, len(sent))
+	results := make(chan *connectors.Result, len(sent))
+	for _, r := range sent {
+		records <- r
+	}
+	close(records)
+
 	ctx := context.Background()
-	if err := exp.CreateDirectory(ctx, "repo-a/issues"); err != nil {
-		t.Errorf("CreateDirectory: %v", err)
+	if err := exp.Export(ctx, records, results); err != nil {
+		t.Fatalf("Export: %v", err)
 	}
-	if err := exp.CreateLink(ctx, "old", "new", exporter.SYMLINK); err != nil {
-		t.Errorf("CreateLink: %v", err)
+	var n int
+	for res := range results {
+		n++
+		if res.Err != nil {
+			t.Errorf("result for %s: %v", res.Record.Pathname, res.Err)
+		}
 	}
-	if err := exp.SetPermissions(ctx, "repo-a/manifest.json", nil); err != nil {
-		t.Errorf("SetPermissions: %v", err)
+	if n != len(sent) {
+		t.Errorf("got %d results, want %d", n, len(sent))
 	}
 	if err := exp.Close(ctx); err != nil {
 		t.Errorf("Close: %v", err)
@@ -87,13 +112,7 @@ func TestExporterNoOps(t *testing.T) {
 }
 
 func TestStoreFile_UnknownPath(t *testing.T) {
-	exp, err := integration_github.NewExporter(context.Background(), &exporter.Options{}, "github", map[string]string{
-		"token":    "ghp_test",
-		"location": "github://alice",
-	})
-	if err != nil {
-		t.Fatalf("NewExporter: %v", err)
-	}
+	exp := integration_github.NewGitHubExporter(nil, "alice", "")
 	if err := exp.StoreFile(context.Background(), "repo-a/unknown.txt", strings.NewReader("data"), 4); err != nil {
 		t.Errorf("StoreFile unknown path should be no-op, got: %v", err)
 	}
@@ -118,6 +137,27 @@ func TestHandleManifest_ExistingRepo(t *testing.T) {
 	}
 	if called {
 		t.Error("expected no repo creation call for existing repo")
+	}
+}
+
+// TestStoreFile_RepoNamedAfterOwner verifies that a profile repo (alice/alice)
+// is not mistaken for an owner prefix.
+func TestStoreFile_RepoNamedAfterOwner(t *testing.T) {
+	mux := http.NewServeMux()
+	checked := false
+	mux.HandleFunc("/api/v3/repos/alice/alice", func(w http.ResponseWriter, _ *http.Request) {
+		checked = true
+		writeJSON(w, map[string]any{"id": 1, "name": "alice"})
+	})
+	_, client := newTestClient(t, mux)
+
+	exp := integration_github.NewGitHubExporter(client, "alice", "")
+	body, _ := json.Marshal(map[string]any{"name": "alice"})
+	if err := exp.StoreFile(context.Background(), "/alice/manifest.json", bytes.NewReader(body), int64(len(body))); err != nil {
+		t.Fatalf("StoreFile manifest: %v", err)
+	}
+	if !checked {
+		t.Error("expected manifest for alice/alice to be restored")
 	}
 }
 
@@ -517,7 +557,7 @@ func TestHandleGitArchive_NewRepo(t *testing.T) {
 }
 
 func TestNewExporter_ForceFlag(t *testing.T) {
-	_, err := integration_github.NewExporter(context.Background(), &exporter.Options{}, "github", map[string]string{
+	_, err := integration_github.NewExporter(context.Background(), &connectors.Options{}, "github", map[string]string{
 		"token":    "ghp_test",
 		"location": "github://alice",
 		"force":    "true",

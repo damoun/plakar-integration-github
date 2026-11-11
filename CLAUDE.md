@@ -25,32 +25,34 @@ plakar at /path/to/repo backup @mygithub
 
 ## Architecture
 
-This is a **plakar importer plugin** for GitHub. Plakar v1.0.6 loads plugins as gRPC subprocess binaries. The plugin lifecycle is:
+This is a **plakar importer plugin** for GitHub. Plakar v1.1 loads plugins as gRPC subprocess binaries. The plugin lifecycle is:
 
 1. `plakar` reads `manifest.yaml` to discover which protocol (`github://`) maps to which binary (`integration-github-importer`)
 2. plakar spawns the binary; the binary starts a gRPC server via `sdk.EntrypointImporter`
-3. plakar calls `Init` → `Scan` → reads records from the channel → stores them
+3. plakar calls `Init` → `Import` → reads records from the channel → stores them
 
-### Key interface (kloset v1.0.12 — `snapshot/importer`)
+### Key interface (kloset v1.1 — `connectors/importer`)
 
 ```go
 type Importer interface {
-    Origin(ctx) (string, error)
-    Type(ctx)   (string, error)
-    Root(ctx)   (string, error)
-    Scan(ctx)   (<-chan *ScanResult, error)
-    Close(ctx)  error
+    Origin() string
+    Type() string
+    Root() string
+    Flags() location.Flags
+    Ping(ctx) error
+    Import(ctx, chan<- *connectors.Record, <-chan *connectors.Result) error
+    Close(ctx) error
 }
 ```
 
-Records are emitted via `importer.NewScanRecord(pathname, target, fileInfo, xattrs, readerFn)`.
+Records are emitted via `connectors.NewRecord(pathname, target, fileInfo, xattrs, readerFn)`. `Import` must close the records channel when done. The exporter mirrors this with `Export(ctx, <-chan *connectors.Record, chan<- *connectors.Result)` and must send one result per record, then close the results channel.
 
 ### File layout
 
 | File               | Role                                                                                             |
 | ------------------ | ------------------------------------------------------------------------------------------------ |
 | `connector.go`     | `init()` — registers `"github"` protocol with `importer.Register`                                |
-| `importer.go`      | `GitHubImporter` struct + `NewImporter` constructor + `Scan` + all `emit*` helpers               |
+| `importer.go`      | `GitHubImporter` struct + `NewImporter` constructor + `Import` + all `emit*` helpers             |
 | `github.go`        | GitHub API client (`NewGitHubClient`), `IsOrg`, `ListRepos`, `ListIssues`, `paginateAll` generic |
 | `importer/main.go` | Binary entrypoint — calls `sdk.EntrypointImporter`                                               |
 | `manifest.yaml`    | Plugin metadata: name, version, `api_version: 1.0.0`, connector `protocols` list                 |
@@ -65,9 +67,8 @@ Records are emitted via `importer.NewScanRecord(pathname, target, fileInfo, xatt
 
 ### SDK / API version coupling
 
-- plakar v1.0.6 requires `api_version: 1.0.0` in `manifest.yaml` (no `v` prefix)
-- Uses `github.com/PlakarKorp/kloset v1.0.12` and `go-kloset-sdk v1.0.5`
-- **Do not upgrade to the v1.1.x beta SDK** — the interface changed (`Import` → `Scan`, `connectors` → `snapshot/importer` package paths)
+- Uses `github.com/PlakarKorp/kloset v1.1.x` and `go-kloset-sdk v1.1.x`, which need plakar v1.1+
+- Plugins built against kloset v1.0.x (`snapshot/importer`, `Scan`) do not load in plakar v1.1, and the reverse is also true
 
 ### Location parsing
 
