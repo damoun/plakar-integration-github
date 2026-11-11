@@ -6,7 +6,6 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -79,18 +78,11 @@ func TestNewExporter_OwnerOverride(t *testing.T) {
 // TestExport_AcksAllRecords verifies that directories, symlinks and unknown
 // files are acknowledged without touching the GitHub API.
 func TestExport_AcksAllRecords(t *testing.T) {
-	exp, err := integration_github.NewExporter(context.Background(), &connectors.Options{}, "github", map[string]string{
-		"token":    "ghp_test",
-		"location": "github://alice",
-	})
-	if err != nil {
-		t.Fatalf("NewExporter: %v", err)
-	}
-	empty := func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader("")), nil }
+	exp := integration_github.NewGitHubExporter(nil, "alice", "")
 	sent := []*connectors.Record{
-		connectors.NewRecord("/repo-a", "", objects.FileInfo{Lname: "repo-a", Lmode: os.ModeDir | 0o755}, nil, empty),
-		connectors.NewRecord("/repo-a/link", "target", objects.FileInfo{Lname: "link", Lmode: os.ModeSymlink | 0o777}, nil, empty),
-		connectors.NewRecord("/repo-a/unknown.txt", "", objects.FileInfo{Lname: "unknown.txt", Lmode: 0o644}, nil, empty),
+		connectors.NewRecord("/repo-a", "", objects.FileInfo{Lname: "repo-a", Lmode: os.ModeDir | 0o755}, nil, nil),
+		connectors.NewRecord("/repo-a/link", "target", objects.FileInfo{Lname: "link", Lmode: os.ModeSymlink | 0o777}, nil, nil),
+		connectors.NewRecord("/repo-a/unknown.txt", "", objects.FileInfo{Lname: "unknown.txt", Lmode: 0o644}, nil, nil),
 	}
 
 	records := make(chan *connectors.Record, len(sent))
